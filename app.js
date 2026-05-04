@@ -9,7 +9,7 @@ const CLIENT_ID = "576797485556-9gi7glhjmf65qfs4efaedc6fjc0k3n0g.apps.googleuser
 const SCOPES = "https://www.googleapis.com/auth/calendar.events";
 
 let tokenClient;
-let accessToken = null;
+let accessToken = localStorage.getItem("google_token") || null;
 
 // ======================
 // DOM
@@ -19,6 +19,7 @@ const todoInput = document.getElementById("todo-input");
 const todoList = document.getElementById("todo-list");
 const filterBtns = document.querySelectorAll(".filter-btn");
 const activeCount = document.getElementById("active-count");
+const loginStatus = document.getElementById("login-status");
 
 // ======================
 // INIT
@@ -26,10 +27,11 @@ const activeCount = document.getElementById("active-count");
 document.addEventListener("DOMContentLoaded", () => {
     renderTodos();
     updateStats();
+    updateLoginUI();
 });
 
 // ======================
-// GOOGLE LOGIN
+// GOOGLE INIT
 // ======================
 window.onload = () => {
     tokenClient = google.accounts.oauth2.initTokenClient({
@@ -38,25 +40,38 @@ window.onload = () => {
         callback: (tokenResponse) => {
             accessToken = tokenResponse.access_token;
             localStorage.setItem("google_token", accessToken);
-            console.log("Google login OK ✅");
+
+            updateLoginUI();
+            console.log("Google login success ✅");
         },
     });
 };
 
+// ======================
+// LOGIN
+// ======================
 document.getElementById("google-login").addEventListener("click", () => {
     tokenClient.requestAccessToken();
 });
 
 // ======================
-// EVENTS
+// LOGIN UI STATUS
 // ======================
-todoForm.addEventListener("submit", addTodo);
-todoList.addEventListener("click", handleClick);
-filterBtns.forEach(btn => btn.addEventListener("click", handleFilter));
+function updateLoginUI() {
+    if (accessToken) {
+        loginStatus.textContent = "Signed in to Google ✅";
+        loginStatus.style.color = "#10b981";
+    } else {
+        loginStatus.textContent = "Not signed in";
+        loginStatus.style.color = "#94a3b8";
+    }
+}
 
 // ======================
 // ADD TODO
 // ======================
+todoForm.addEventListener("submit", addTodo);
+
 function addTodo(e) {
     e.preventDefault();
 
@@ -80,7 +95,7 @@ function addTodo(e) {
     saveState();
     renderTodos();
 
-    // optional: send to Google Calendar
+    // 🟢 SAFE calendar sync
     if (accessToken && dueDate) {
         createGoogleEvent(todo);
     }
@@ -89,30 +104,52 @@ function addTodo(e) {
 }
 
 // ======================
-// GOOGLE CALENDAR EVENT
+// ROBUST GOOGLE CALENDAR SYNC
 // ======================
 async function createGoogleEvent(todo) {
-    const event = {
-        summary: todo.text,
-        start: { date: todo.dueDate },
-        end: { date: todo.dueDate }
-    };
+    try {
+        const event = {
+            summary: todo.text,
+            description: `Priority: ${todo.priority}`,
+            start: {
+                date: todo.dueDate
+            },
+            end: {
+                date: todo.dueDate
+            }
+        };
 
-    await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
-        method: "POST",
-        headers: {
-            "Authorization": "Bearer " + accessToken,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(event)
-    });
+        const res = await fetch(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            {
+                method: "POST",
+                headers: {
+                    Authorization: "Bearer " + accessToken,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(event)
+            }
+        );
 
-    console.log("Event added to Google Calendar 📅");
+        if (!res.ok) {
+            const err = await res.json();
+            console.error("Calendar error:", err);
+            alert("Failed to add to Google Calendar");
+            return;
+        }
+
+        console.log("Event added 📅");
+    } catch (err) {
+        console.error("Network error:", err);
+        alert("Network error while adding event");
+    }
 }
 
 // ======================
-// CLICK
+// CLICK HANDLER
 // ======================
+todoList.addEventListener("click", handleClick);
+
 function handleClick(e) {
     const item = e.target.closest(".todo-item");
     if (!item) return;
@@ -137,6 +174,10 @@ function handleClick(e) {
 // ======================
 // FILTERS
 // ======================
+filterBtns.forEach(btn =>
+    btn.addEventListener("click", handleFilter)
+);
+
 function handleFilter(e) {
     filterBtns.forEach(b => b.classList.remove("active"));
     e.target.classList.add("active");
@@ -164,20 +205,10 @@ function renderTodos() {
         li.className = `todo-item ${todo.priority}`;
 
         li.innerHTML = `
-            <div class="todo-main">
-                <input type="checkbox" class="todo-checkbox" ${todo.completed ? "checked" : ""}>
-                <div class="todo-content">
-                    <div class="todo-text">${todo.text}</div>
-                    <div class="todo-meta">
-                        <span>${todo.dueDate || "no date"}</span>
-                        <span class="priority ${todo.priority}">${todo.priority}</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="todo-actions">
-                <button class="delete">🗑</button>
-            </div>
+            <input type="checkbox" class="todo-checkbox" ${todo.completed ? "checked" : ""}>
+            <span class="todo-text">${todo.text}</span>
+            <small>${todo.dueDate || ""}</small>
+            <button class="delete">🗑</button>
         `;
 
         todoList.appendChild(li);
@@ -187,7 +218,7 @@ function renderTodos() {
 }
 
 // ======================
-// SAVE
+// STORAGE
 // ======================
 function saveState() {
     localStorage.setItem("todos", JSON.stringify(todos));
