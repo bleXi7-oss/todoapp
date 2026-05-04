@@ -1,67 +1,178 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Todo + Google Calendar</title>
-
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Doable — Things worth doing</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 </head>
-
 <body>
 
-<main class="app-container">
-
-    <header>
-        <h1>Tasks</h1>
-        <div>
-            <span id="active-count">0</span> active
+  <!-- ═══════════════ MODAL EDIT ═══════════════ -->
+  <div id="edit-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <span id="modal-title" class="modal-title">Edit task</span>
+        <button class="modal-close" id="modal-close-btn" aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="modal-text">Task</label>
+          <input id="modal-text" class="form-input" type="text" placeholder="What needs to be done?" maxlength="200" />
         </div>
-    </header>
-
-    <!-- 🔵 GOOGLE LOGIN -->
-    <button id="google-login" style="margin-bottom:10px;">
-        Sign in with Google
-    </button>
-
-    <!-- FORM -->
-    <form id="todo-form">
-
-        <div class="input-row">
-            <input type="text" id="todo-input" placeholder="What needs to be done?">
-            <button type="submit">+</button>
-        </div>
-
-        <div class="meta-row">
-            <select id="priority">
-                <option value="low">Low</option>
-                <option value="medium" selected>Medium</option>
-                <option value="high">High</option>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="modal-priority">Priority</label>
+            <select id="modal-priority" class="form-select">
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
             </select>
-
-            <input type="date" id="due-date">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="modal-date">Due date</label>
+            <input id="modal-date" class="form-input" type="date" />
+          </div>
         </div>
-
-    </form>
-
-    <!-- FILTERS -->
-    <div class="filters">
-        <button class="filter-btn active" data-filter="all">All</button>
-        <button class="filter-btn" data-filter="active">Active</button>
-        <button class="filter-btn" data-filter="completed">Completed</button>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="modal-cancel-btn">Cancel</button>
+        <button class="btn btn-primary" id="modal-save-btn">Save changes</button>
+      </div>
     </div>
+  </div>
 
-    <!-- LIST -->
-    <ul id="todo-list"></ul>
+  <!-- ═══════════════ APP SHELL ═══════════════ -->
+  <div class="app">
 
-</main>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <rect x="2" y="2" width="7" height="7" rx="2" fill="currentColor" opacity=".9"/>
+            <rect x="11" y="2" width="7" height="7" rx="2" fill="currentColor" opacity=".5"/>
+            <rect x="2" y="11" width="7" height="7" rx="2" fill="currentColor" opacity=".5"/>
+            <rect x="11" y="11" width="7" height="7" rx="2" fill="currentColor" opacity=".2"/>
+          </svg>
+        </div>
+        <span class="brand-name">Doable</span>
+      </div>
 
-<!-- GOOGLE API -->
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-filter="all">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="9.5" y="1.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="1.5" y="9.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/></svg>
+          All tasks
+          <span class="nav-badge" id="badge-all">0</span>
+        </button>
+        <button class="nav-item" data-filter="active">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2.5" fill="currentColor"/></svg>
+          Active
+          <span class="nav-badge" id="badge-active">0</span>
+        </button>
+        <button class="nav-item" data-filter="completed">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Completed
+          <span class="nav-badge" id="badge-completed">0</span>
+        </button>
+      </nav>
 
-<!-- APP -->
-<script src="app.js"></script>
+      <div class="sidebar-divider"></div>
 
+      <div class="priority-legend">
+        <p class="legend-label">Priority</p>
+        <div class="legend-item"><span class="dot dot--high"></span> High</div>
+        <div class="legend-item"><span class="dot dot--medium"></span> Medium</div>
+        <div class="legend-item"><span class="dot dot--low"></span> Low</div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="btn-danger-ghost" id="clear-completed-btn">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V4M10 4l-.7 7.5a.5.5 0 01-.5.5H5.2a.5.5 0 01-.5-.5L4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Clear completed
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <header class="main-header">
+        <div class="header-text">
+          <h1 class="page-title">My tasks</h1>
+          <p class="page-sub" id="page-subtitle">Let's get things done.</p>
+        </div>
+        <div class="header-actions">
+          <div class="sort-wrap">
+            <label class="form-label sr-only" for="sort-select">Sort by</label>
+            <select id="sort-select" class="form-select form-select--sm">
+              <option value="manual">Manual order</option>
+              <option value="priority">By priority</option>
+              <option value="dueDate">By due date</option>
+              <option value="created">Date created</option>
+            </select>
+          </div>
+        </div>
+      </header>
+
+      <!-- Add task form -->
+      <div class="add-task-card">
+        <div class="add-task-top">
+          <div class="add-checkbox-placeholder" aria-hidden="true"></div>
+          <input
+            id="new-task-input"
+            class="add-task-input"
+            type="text"
+            placeholder="Add a new task…"
+            maxlength="200"
+            autocomplete="off"
+          />
+        </div>
+        <div class="add-task-meta">
+          <select id="new-priority" class="pill-select" aria-label="Priority">
+            <option value="low">🟢 Low</option>
+            <option value="medium" selected>🟠 Medium</option>
+            <option value="high">🔴 High</option>
+          </select>
+          <input id="new-date" class="pill-date" type="date" aria-label="Due date" />
+          <button class="btn btn-primary btn-add" id="add-task-btn" aria-label="Add task">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Add
+          </button>
+        </div>
+      </div>
+
+      <!-- Overdue banner -->
+      <div class="overdue-banner" id="overdue-banner" hidden>
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><circle cx="7.5" cy="7.5" r="6.5" stroke="currentColor" stroke-width="1.4"/><path d="M7.5 4.5v3.5M7.5 10.5v.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span id="overdue-text">You have overdue tasks</span>
+      </div>
+
+      <!-- Task list -->
+      <ul class="task-list" id="task-list" role="list" aria-label="Tasks">
+        <!-- rendered by JS -->
+      </ul>
+
+      <!-- Empty state -->
+      <div class="empty-state" id="empty-state" hidden>
+        <div class="empty-icon">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <rect x="8" y="12" width="32" height="28" rx="4" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M16 20h16M16 27h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M30 34l3 3 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20 8h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="empty-title" id="empty-title">All clear here</p>
+        <p class="empty-sub" id="empty-sub">Add your first task above to get started.</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>
