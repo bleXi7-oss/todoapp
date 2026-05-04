@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Modern Tasks</title>
+    <title>Todo + Google Calendar</title>
 
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -15,16 +15,22 @@
 
     <header>
         <h1>Tasks</h1>
-        <div class="task-stats">
-            <span id="active-count">0</span> active tasks
+        <div>
+            <span id="active-count">0</span> active
         </div>
     </header>
 
-    <form id="todo-form" class="todo-form">
+    <!-- 🔵 GOOGLE LOGIN -->
+    <button id="google-login" style="margin-bottom:10px;">
+        Sign in with Google
+    </button>
+
+    <!-- FORM -->
+    <form id="todo-form">
 
         <div class="input-row">
             <input type="text" id="todo-input" placeholder="What needs to be done?">
-            <button type="submit" id="add-btn">+</button>
+            <button type="submit">+</button>
         </div>
 
         <div class="meta-row">
@@ -39,16 +45,23 @@
 
     </form>
 
-    <nav class="filters">
+    <!-- FILTERS -->
+    <div class="filters">
         <button class="filter-btn active" data-filter="all">All</button>
         <button class="filter-btn" data-filter="active">Active</button>
         <button class="filter-btn" data-filter="completed">Completed</button>
-    </nav>
+    </div>
 
+    <!-- LIST -->
     <ul id="todo-list"></ul>
 
 </main>
 
+<!-- GOOGLE API -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
+<!-- APP -->
 <script src="app.js"></script>
+
 </body>
 </html>
