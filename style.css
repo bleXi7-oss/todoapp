@@ -292,9 +292,10 @@ body {
 }
 .nav-item.active .nav-badge { background: rgba(255,255,255,0.12); color: #e0ddd6; }
 
-.sidebar-divider { height: 1px; background: var(--sidebar-border); margin: 8px 0; }
+.sidebar-divider { height: 1px; background: var(--sidebar-border); margin: 8px 0; border: none; }
 
 .priority-legend { padding: 4px 10px 8px; }
+.legend-list { list-style: none; }
 .legend-label {
   font-size: 10.5px;
   font-weight: 600;
@@ -398,6 +399,7 @@ body {
 .form-select--sm { font-size: 12.5px; padding: 7px 30px 7px 10px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-group { display: flex; flex-direction: column; }
+.form-group--spaced { margin-top: 18px; }
 
 /* ── Buttons ────────────────────────────────── */
 .btn {
@@ -820,7 +822,7 @@ body {
 }
 
 /* Setup steps */
-.setup-steps { display: flex; flex-direction: column; gap: 12px; }
+.setup-steps { display: flex; flex-direction: column; gap: 12px; list-style: none; }
 .setup-step {
   display: flex;
   align-items: flex-start;
@@ -942,6 +944,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+.sync-log-actions { display: flex; gap: 6px; align-items: center; }
 .sync-log-close {
   display: flex; align-items: center; justify-content: center;
   width: 22px; height: 22px;

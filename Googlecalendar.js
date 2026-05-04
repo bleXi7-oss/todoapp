@@ -7,13 +7,14 @@
  * Sections:
  *   1. Config & constants
  *   2. Token storage
- *   3. OAuth flow
- *   4. Calendar API helpers
- *   5. Sync operations (create / update / delete)
- *   6. Sync-all
- *   7. UI state management
- *   8. Toast & log
- *   9. Public API
+ *   3. OAuth flow (initTokenClient, silentRefresh, sign in/out)
+ *   4. Calendar API (gcalFetch + event endpoints)
+ *   5. Sync operations (syncTodo, unsyncTodo, syncAllTodos)
+ *   6. DOM cache (gcalDOM, cacheDOM)
+ *   7. UI widget (gcalUI)
+ *   8. Toast & log (gcalToast, gcalLog)
+ *   9. Local utils
+ *  10. Public API + init
  * ─────────────────────────────────────────────────
  *
  * SETUP:
@@ -90,7 +91,8 @@ const clientIdStore = {
 /* ═══════════════════════════════════════════════
    3. OAUTH FLOW
 ═══════════════════════════════════════════════ */
-let _tokenClient = null;
+let _tokenClient    = null;
+let _refreshPromise = null; // shared promise during silent refresh — prevents concurrent callback races
 
 /**
  * Initialise (or reinitialise) the GIS token client.
@@ -108,6 +110,26 @@ function initTokenClient(clientId) {
     error_callback: handleTokenError,
   });
   return true;
+}
+
+/**
+ * Silently request a new access token.
+ * Returns the same Promise to all concurrent callers so only one refresh runs at a time.
+ */
+function silentRefresh() {
+  if (_refreshPromise) return _refreshPromise;
+  if (!_tokenClient)   return Promise.reject(new Error('NOT_AUTHENTICATED'));
+  _refreshPromise = new Promise((resolve, reject) => {
+    const origCallback = _tokenClient.callback;
+    _tokenClient.callback = (resp) => {
+      _tokenClient.callback = origCallback;
+      if (resp.error) { reject(new Error(resp.error)); return; }
+      tokenStore.set(parseTokenResponse(resp));
+      resolve();
+    };
+    _tokenClient.requestAccessToken({ prompt: '' });
+  }).finally(() => { _refreshPromise = null; });
+  return _refreshPromise;
 }
 
 /**

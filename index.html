@@ -19,44 +19,44 @@
           <span class="gcal-icon-badge" aria-hidden="true">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M3 9h18" stroke="currentColor" stroke-width="1.8"/><path d="M8 2v4M16 2v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="7" y="13" width="4" height="4" rx="1" fill="currentColor" opacity=".6"/></svg>
           </span>
-          <span id="setup-modal-title" class="modal-title">Connect Google Calendar</span>
+          <h2 id="setup-modal-title" class="modal-title">Connect Google Calendar</h2>
         </div>
-        <button class="modal-close" id="setup-modal-close" aria-label="Close">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <button class="modal-close" id="setup-modal-close" aria-label="Close setup dialog">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
       </div>
       <div class="modal-body">
-        <div class="setup-steps">
-          <div class="setup-step">
-            <span class="step-num">1</span>
+        <ol class="setup-steps">
+          <li class="setup-step">
+            <span class="step-num" aria-hidden="true">1</span>
             <div class="step-body">
               <strong>Create a Google Cloud project</strong>
-              <span>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com</a> → New Project</span>
+              <span>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer">console.cloud.google.com</a> → New Project</span>
             </div>
-          </div>
-          <div class="setup-step">
-            <span class="step-num">2</span>
+          </li>
+          <li class="setup-step">
+            <span class="step-num" aria-hidden="true">2</span>
             <div class="step-body">
               <strong>Enable Google Calendar API</strong>
               <span>APIs &amp; Services → Library → search "Google Calendar API" → Enable</span>
             </div>
-          </div>
-          <div class="setup-step">
-            <span class="step-num">3</span>
+          </li>
+          <li class="setup-step">
+            <span class="step-num" aria-hidden="true">3</span>
             <div class="step-body">
               <strong>Create OAuth 2.0 credentials</strong>
               <span>APIs &amp; Services → Credentials → Create Credentials → OAuth client ID → Web application. Add <code id="setup-origin-hint">this page's origin</code> to Authorized JavaScript origins.</span>
             </div>
-          </div>
-          <div class="setup-step">
-            <span class="step-num">4</span>
+          </li>
+          <li class="setup-step">
+            <span class="step-num" aria-hidden="true">4</span>
             <div class="step-body">
               <strong>Paste your Client ID below</strong>
               <span>Copy the Client ID (ends in <code>.apps.googleusercontent.com</code>)</span>
             </div>
-          </div>
-        </div>
-        <div class="form-group" style="margin-top:18px">
+          </li>
+        </ol>
+        <div class="form-group form-group--spaced">
           <label class="form-label" for="setup-client-id">Google OAuth Client ID</label>
           <input id="setup-client-id" class="form-input" type="text"
             placeholder="123456789-abc.apps.googleusercontent.com"
@@ -75,15 +75,16 @@
   <div id="edit-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
     <div class="modal-card">
       <div class="modal-header">
-        <span id="modal-title" class="modal-title">Edit task</span>
-        <button class="modal-close" id="modal-close-btn" aria-label="Close">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <h2 id="modal-title" class="modal-title">Edit task</h2>
+        <button class="modal-close" id="modal-close-btn" aria-label="Close edit dialog">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
       </div>
       <div class="modal-body">
         <div class="form-group">
           <label class="form-label" for="modal-text">Task</label>
-          <input id="modal-text" class="form-input" type="text" placeholder="What needs to be done?" maxlength="200" />
+          <input id="modal-text" class="form-input" type="text"
+            placeholder="What needs to be done?" maxlength="200" autocomplete="off" />
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -99,6 +100,7 @@
             <input id="modal-date" class="form-input" type="date" />
           </div>
         </div>
+        <!-- Visibility controlled by JS based on Google Calendar auth state -->
         <div class="modal-sync-row" id="modal-sync-row">
           <div class="sync-row-left">
             <span class="sync-row-icon" aria-hidden="true">
@@ -108,7 +110,7 @@
           </div>
           <div class="toggle-wrap">
             <input type="checkbox" id="modal-sync-toggle" class="toggle-input" />
-            <label class="toggle-track" for="modal-sync-toggle" aria-label="Toggle calendar sync"></label>
+            <label class="toggle-track" for="modal-sync-toggle" aria-label="Toggle Google Calendar sync"></label>
           </div>
         </div>
       </div>
@@ -123,17 +125,17 @@
   <div id="sync-log-panel" class="sync-log-panel" hidden>
     <div class="sync-log-header">
       <span class="sync-log-title">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M4 4v5h5M20 20v-5h-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9a8 8 0 00-14.9-2.3M4 15a8 8 0 0014.9 2.3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4v5h5M20 20v-5h-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9a8 8 0 00-14.9-2.3M4 15a8 8 0 0014.9 2.3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
         Sync activity
       </span>
-      <div style="display:flex;gap:6px;align-items:center">
+      <div class="sync-log-actions">
         <button class="sync-log-clear" id="sync-log-clear">Clear</button>
-        <button class="sync-log-close" id="sync-log-close" aria-label="Close">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <button class="sync-log-close" id="sync-log-close" aria-label="Close sync log">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
       </div>
     </div>
-    <ul class="sync-log-list" id="sync-log-list" role="log" aria-live="polite"></ul>
+    <ul class="sync-log-list" id="sync-log-list" role="log" aria-live="polite" aria-label="Sync activity log"></ul>
   </div>
 
   <!-- ═══════════════ TOAST ═══════════════ -->
@@ -142,9 +144,9 @@
   <!-- ═══════════════ APP SHELL ═══════════════ -->
   <div class="app">
 
-    <aside class="sidebar">
+    <aside class="sidebar" aria-label="Navigation">
       <div class="brand">
-        <div class="brand-mark">
+        <div class="brand-mark" aria-hidden="true">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
             <rect x="2" y="2" width="7" height="7" rx="2" fill="currentColor" opacity=".9"/>
             <rect x="11" y="2" width="7" height="7" rx="2" fill="currentColor" opacity=".5"/>
@@ -155,73 +157,74 @@
         <span class="brand-name">Doable</span>
       </div>
 
-      <!-- Google Calendar widget — JS controls visibility -->
+      <!-- Google Calendar widget — JS toggles gcal-loggedout/gcal-loggedin visibility -->
       <div class="gcal-widget">
-        <!-- Logged out -->
         <div id="gcal-loggedout">
           <button class="btn-gcal-connect" id="gcal-connect-btn">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M3 9h18" stroke="currentColor" stroke-width="1.8"/><path d="M8 2v4M16 2v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M3 9h18" stroke="currentColor" stroke-width="1.8"/><path d="M8 2v4M16 2v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
             Connect Calendar
           </button>
         </div>
-        <!-- Logged in -->
         <div id="gcal-loggedin" hidden>
           <div class="gcal-user-row">
-            <div class="gcal-avatar" id="gcal-avatar">G</div>
+            <div class="gcal-avatar" id="gcal-avatar" aria-hidden="true">G</div>
             <div class="gcal-user-info">
               <span class="gcal-user-name" id="gcal-user-name">Google Account</span>
               <span class="gcal-status">
-                <span class="status-dot"></span>Calendar linked
+                <span class="status-dot" aria-hidden="true"></span>
+                Calendar linked
               </span>
             </div>
           </div>
           <div class="gcal-btn-row">
-            <button class="gcal-action-btn" id="gcal-sync-all-btn" title="Sync all tasks">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M4 4v5h5M20 20v-5h-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9a8 8 0 00-14.9-2.3M4 15a8 8 0 0014.9 2.3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+            <button class="gcal-action-btn" id="gcal-sync-all-btn" aria-label="Sync all tasks to Google Calendar">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4v5h5M20 20v-5h-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 9a8 8 0 00-14.9-2.3M4 15a8 8 0 0014.9 2.3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
               Sync all
             </button>
-            <button class="gcal-action-btn gcal-action-btn--icon" id="gcal-log-btn" title="Sync log">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <button class="gcal-action-btn gcal-action-btn--icon" id="gcal-log-btn" aria-label="View sync log">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
-            <button class="gcal-action-btn gcal-action-btn--icon gcal-action-btn--danger" id="gcal-disconnect-btn" title="Disconnect">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+            <button class="gcal-action-btn gcal-action-btn--icon gcal-action-btn--danger" id="gcal-disconnect-btn" aria-label="Disconnect Google Calendar">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
             </button>
           </div>
         </div>
       </div>
 
-      <div class="sidebar-divider"></div>
+      <hr class="sidebar-divider" aria-hidden="true" />
 
-      <nav class="sidebar-nav">
+      <nav class="sidebar-nav" aria-label="Filter tasks">
         <button class="nav-item active" data-filter="all">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="9.5" y="1.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="1.5" y="9.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/></svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.5" y="1.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="9.5" y="1.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="1.5" y="9.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1.2" stroke="currentColor" stroke-width="1.5"/></svg>
           All tasks
-          <span class="nav-badge" id="badge-all">0</span>
+          <span class="nav-badge">0</span>
         </button>
         <button class="nav-item" data-filter="active">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2.5" fill="currentColor"/></svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2.5" fill="currentColor"/></svg>
           Active
-          <span class="nav-badge" id="badge-active">0</span>
+          <span class="nav-badge">0</span>
         </button>
         <button class="nav-item" data-filter="completed">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Completed
-          <span class="nav-badge" id="badge-completed">0</span>
+          <span class="nav-badge">0</span>
         </button>
       </nav>
 
-      <div class="sidebar-divider"></div>
+      <hr class="sidebar-divider" aria-hidden="true" />
 
       <div class="priority-legend">
         <p class="legend-label">Priority</p>
-        <div class="legend-item"><span class="dot dot--high"></span> High</div>
-        <div class="legend-item"><span class="dot dot--medium"></span> Medium</div>
-        <div class="legend-item"><span class="dot dot--low"></span> Low</div>
+        <ul class="legend-list">
+          <li class="legend-item"><span class="dot dot--high" aria-hidden="true"></span> High</li>
+          <li class="legend-item"><span class="dot dot--medium" aria-hidden="true"></span> Medium</li>
+          <li class="legend-item"><span class="dot dot--low" aria-hidden="true"></span> Low</li>
+        </ul>
       </div>
 
       <div class="sidebar-footer">
         <button class="btn-danger-ghost" id="clear-completed-btn">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V4M10 4l-.7 7.5a.5.5 0 01-.5.5H5.2a.5.5 0 01-.5-.5L4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 4h10M5 4V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V4M10 4l-.7 7.5a.5.5 0 01-.5.5H5.2a.5.5 0 01-.5-.5L4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Clear completed
         </button>
       </div>
@@ -244,8 +247,10 @@
         </div>
       </header>
 
+      <!-- Add task form -->
       <div class="add-task-card">
         <div class="add-task-top">
+          <!-- Decorative placeholder aligns the input with task checkboxes in the list below -->
           <div class="add-checkbox-placeholder" aria-hidden="true"></div>
           <input id="new-task-input" class="add-task-input" type="text"
             placeholder="Add a new task…" maxlength="200" autocomplete="off" />
@@ -258,27 +263,32 @@
           </select>
           <input id="new-date" class="pill-date" type="date" aria-label="Due date" />
           <div class="add-task-right">
-            <label class="add-cal-label" id="add-cal-label" title="Sync to Google Calendar" aria-label="Sync to Calendar">
+            <!-- Visibility controlled by JS when Google Calendar is connected -->
+            <label class="add-cal-label" id="add-cal-label" aria-label="Sync new task to Google Calendar">
               <input type="checkbox" id="new-sync-toggle" class="add-cal-checkbox" />
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M3 9h18" stroke="currentColor" stroke-width="1.8"/><path d="M8 2v4M16 2v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M3 9h18" stroke="currentColor" stroke-width="1.8"/><path d="M8 2v4M16 2v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
             </label>
-            <button class="btn btn-primary btn-add" id="add-task-btn" aria-label="Add task">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <button class="btn btn-primary btn-add" id="add-task-btn">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
               Add
             </button>
           </div>
         </div>
       </div>
 
-      <div class="overdue-banner" id="overdue-banner" hidden>
-        <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><circle cx="7.5" cy="7.5" r="6.5" stroke="currentColor" stroke-width="1.4"/><path d="M7.5 4.5v3.5M7.5 10.5v.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <div class="overdue-banner" id="overdue-banner" role="alert" hidden>
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><circle cx="7.5" cy="7.5" r="6.5" stroke="currentColor" stroke-width="1.4"/><path d="M7.5 4.5v3.5M7.5 10.5v.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         <span id="overdue-text">You have overdue tasks</span>
       </div>
 
-      <ul class="task-list" id="task-list" role="list" aria-label="Tasks"></ul>
+      <ul class="task-list" id="task-list" role="list" aria-label="Tasks" aria-live="polite"></ul>
 
-      <div class="empty-state" id="empty-state" hidden>
-        <div class="empty-icon">
+      <div class="empty-state" id="empty-state"
+        data-msg-all="All clear here"            data-sub-all="Add your first task above to get started."
+        data-msg-active="All done!"              data-sub-active="Everything is taken care of."
+        data-msg-completed="No completed tasks yet" data-sub-completed="Finish something to see it here."
+        hidden>
+        <div class="empty-icon" aria-hidden="true">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
             <rect x="8" y="12" width="32" height="28" rx="4" stroke="currentColor" stroke-width="1.8"/>
             <path d="M16 20h16M16 27h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -286,8 +296,8 @@
             <path d="M20 8h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </div>
-        <p class="empty-title" id="empty-title">All clear here</p>
-        <p class="empty-sub" id="empty-sub">Add your first task above to get started.</p>
+        <p class="empty-title"></p>
+        <p class="empty-sub"></p>
       </div>
     </main>
   </div>

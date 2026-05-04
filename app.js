@@ -3,14 +3,15 @@
  * ─────────────────────────────────────────────────
  * Sections:
  *   1. State
- *   2. DOM references
- *   3. Utils
- *   4. CRUD logic
- *   5. UI rendering
+ *   2. Utils
+ *   3. Store      (pure data — no DOM, no render calls)
+ *   4. DOM        (cached references, assigned once in initDOM)
+ *   5. UI         (renders from state + store, no mutations)
  *   6. Drag & drop
- *   7. Modal
- *   8. Event binding
- *   9. Init
+ *   7. Modal      (form helpers only — no save logic)
+ *   8. Controller (user actions → store → render)
+ *   9. Events     (thin wiring, delegates to controller)
+ *  10. Init
  * ─────────────────────────────────────────────────
  */
 
@@ -25,52 +26,10 @@ const state = {
   dragState: { draggedId: null, overId: null },
 };
 
-const STORAGE_KEY = 'doable_todos_v3'; // bumped from v2 to handle new fields
+const STORAGE_KEY = 'doable_todos_v3';
 
 /* ═══════════════════════════════════════════════
-   2. DOM REFERENCES
-═══════════════════════════════════════════════ */
-const DOM = {
-  // List & empty
-  taskList:      () => document.getElementById('task-list'),
-  emptyState:    () => document.getElementById('empty-state'),
-  emptyTitle:    () => document.getElementById('empty-title'),
-  emptySub:      () => document.getElementById('empty-sub'),
-  overdueBanner: () => document.getElementById('overdue-banner'),
-  overdueText:   () => document.getElementById('overdue-text'),
-  pageSubtitle:  () => document.getElementById('page-subtitle'),
-
-  // Add form
-  newTaskInput:  () => document.getElementById('new-task-input'),
-  newPriority:   () => document.getElementById('new-priority'),
-  newDate:       () => document.getElementById('new-date'),
-  newSyncToggle: () => document.getElementById('new-sync-toggle'),
-  addTaskBtn:    () => document.getElementById('add-task-btn'),
-
-  // Sidebar controls
-  navItems:          () => document.querySelectorAll('.nav-item'),
-  sortSelect:        () => document.getElementById('sort-select'),
-  clearCompletedBtn: () => document.getElementById('clear-completed-btn'),
-  gcalSyncAllBtn:    () => document.getElementById('gcal-sync-all-btn'),
-
-  // Badges
-  badgeAll:       () => document.getElementById('badge-all'),
-  badgeActive:    () => document.getElementById('badge-active'),
-  badgeCompleted: () => document.getElementById('badge-completed'),
-
-  // Edit modal
-  modal:           () => document.getElementById('edit-modal'),
-  modalText:       () => document.getElementById('modal-text'),
-  modalPriority:   () => document.getElementById('modal-priority'),
-  modalDate:       () => document.getElementById('modal-date'),
-  modalSyncToggle: () => document.getElementById('modal-sync-toggle'),
-  modalSaveBtn:    () => document.getElementById('modal-save-btn'),
-  modalCancelBtn:  () => document.getElementById('modal-cancel-btn'),
-  modalCloseBtn:   () => document.getElementById('modal-close-btn'),
-};
-
-/* ═══════════════════════════════════════════════
-   3. UTILS
+   2. UTILS
 ═══════════════════════════════════════════════ */
 const utils = {
   escapeHTML(str) {
@@ -83,7 +42,7 @@ const utils = {
   },
 
   uid() {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    return crypto.randomUUID();
   },
 
   todayISO() {
@@ -113,19 +72,20 @@ const utils = {
 };
 
 /* ═══════════════════════════════════════════════
-   4. CRUD LOGIC
+   3. STORE — pure data, no render calls
+   Methods return values so callers can react
+   (GCal async, UI updates) without coupling here.
 ═══════════════════════════════════════════════ */
-const crud = {
+const store = {
   load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       state.todos = raw ? JSON.parse(raw) : [];
-
-      // Migrate from v2: ensure new fields exist
+      // Migrate from v2: ensure calendar fields exist
       state.todos.forEach(t => {
-        if (t.calSync      === undefined) t.calSync      = false;
-        if (t.calEventId   === undefined) t.calEventId   = null;
-        if (t.calSyncedAt  === undefined) t.calSyncedAt  = null;
+        if (t.calSync     === undefined) t.calSync     = false;
+        if (t.calEventId  === undefined) t.calEventId  = null;
+        if (t.calSyncedAt === undefined) t.calSyncedAt = null;
       });
     } catch {
       state.todos = [];
@@ -140,6 +100,10 @@ const crud = {
     }
   },
 
+  find(id) {
+    return state.todos.find(t => t.id === id) ?? null;
+  },
+
   add(text, priority, dueDate, calSync = false) {
     const todo = {
       id:          utils.uid(),
@@ -148,114 +112,51 @@ const crud = {
       priority:    priority || 'medium',
       dueDate:     dueDate || '',
       createdAt:   Date.now(),
-      // Calendar fields
-      calSync:     calSync,
+      calSync,
       calEventId:  null,
       calSyncedAt: null,
     };
     state.todos.unshift(todo);
-    crud.save();
-
-    // Sync to Google Calendar if requested
-    if (calSync && window.googleCalendar?.isAuthenticated()) {
-      window.googleCalendar.syncTodo(todo).then(result => {
-        if (result.success) {
-          todo.calEventId  = result.eventId;
-          todo.calSyncedAt = Date.now();
-          crud.save();
-          ui.render(); // re-render to show sync badge
-        }
-      });
-    }
-
-    return todo;
+    store.save();
+    return todo; // caller handles GCal async if needed
   },
 
   toggle(id) {
-    const todo = state.todos.find(t => t.id === id);
-    if (!todo) return;
+    const todo = store.find(id);
+    if (!todo) return null;
     todo.completed = !todo.completed;
-    crud.save();
-
-    // Update calendar event status if synced
-    if (todo.calSync && todo.calEventId && window.googleCalendar?.isAuthenticated()) {
-      window.googleCalendar.syncTodo(todo, { silent: true });
-    }
+    store.save();
+    return todo; // caller handles silent GCal update
   },
 
+  // Returns { todo, prev } so the caller can decide which GCal action to take.
   update(id, { text, priority, dueDate, calSync }) {
-    const todo = state.todos.find(t => t.id === id);
-    if (!todo) return;
-
-    const wasText     = todo.text;
-    const wasSync     = todo.calSync;
-    const wasDueDate  = todo.dueDate;
-    const wasPriority = todo.priority;
-
+    const todo = store.find(id);
+    if (!todo) return null;
+    const prev = structuredClone(todo);
     if (text     !== undefined) todo.text     = text.trim();
     if (priority !== undefined) todo.priority = priority;
     if (dueDate  !== undefined) todo.dueDate  = dueDate;
     if (calSync  !== undefined) todo.calSync  = calSync;
-    crud.save();
-
-    // Handle calendar sync
-    const gcal = window.googleCalendar;
-    if (!gcal) return;
-
-    const isAuth = gcal.isAuthenticated();
-
-    if (calSync && isAuth) {
-      // User wants sync: create or update event
-      gcal.syncTodo(todo).then(result => {
-        if (result.success) {
-          todo.calEventId  = result.eventId;
-          todo.calSyncedAt = Date.now();
-          crud.save();
-          ui.render();
-        }
-      });
-    } else if (!calSync && wasSync && todo.calEventId && isAuth) {
-      // User turned off sync: remove event
-      gcal.unsyncTodo(todo.calEventId, wasText).then(() => {
-        todo.calEventId  = null;
-        todo.calSyncedAt = null;
-        crud.save();
-        ui.render();
-      });
-    } else if (calSync && todo.calEventId && isAuth) {
-      // Content changed, event exists: patch it
-      const changed = text !== wasText || dueDate !== wasDueDate || priority !== wasPriority;
-      if (changed) {
-        gcal.syncTodo(todo).then(result => {
-          if (result.success) {
-            todo.calSyncedAt = Date.now();
-            crud.save();
-            ui.render();
-          }
-        });
-      }
-    }
+    store.save();
+    return { todo, prev };
   },
 
+  // Returns the removed todo so the caller can clean up GCal.
   remove(id) {
-    const todo = state.todos.find(t => t.id === id);
-    // Delete from Google Calendar if synced
-    if (todo?.calEventId && window.googleCalendar?.isAuthenticated()) {
-      window.googleCalendar.unsyncTodo(todo.calEventId, todo.text);
-    }
-    state.todos = state.todos.filter(t => t.id !== id);
-    crud.save();
+    const idx = state.todos.findIndex(t => t.id === id);
+    if (idx === -1) return null;
+    const [todo] = state.todos.splice(idx, 1);
+    store.save();
+    return todo;
   },
 
+  // Returns removed todos so the caller can clean up GCal.
   clearCompleted() {
-    const gcal = window.googleCalendar;
-    if (gcal?.isAuthenticated()) {
-      state.todos.filter(t => t.completed && t.calEventId).forEach(t => {
-        gcal.unsyncTodo(t.calEventId, t.text);
-      });
-    }
-    state.todos = state.todos.filter(t => !t.completed);
-    crud.save();
+    const removed = state.todos.filter(t => t.completed);
+    state.todos   = state.todos.filter(t => !t.completed);
+    store.save();
+    return removed;
   },
 
   reorder(draggedId, overId) {
@@ -265,18 +166,17 @@ const crud = {
     if (from === -1 || to === -1) return;
     const [item] = state.todos.splice(from, 1);
     state.todos.splice(to, 0, item);
-    crud.save();
+    store.save();
   },
 
-  // Called by gcal sync-all to persist updated event ids
+  // Called by the sync-all callback to persist updated event IDs.
   updateCalFields(todo) {
-    const existing = state.todos.find(t => t.id === todo.id);
+    const existing = store.find(todo.id);
     if (existing) {
       existing.calEventId  = todo.calEventId;
       existing.calSyncedAt = todo.calSyncedAt;
     }
-    crud.save();
-    ui.render();
+    store.save();
   },
 
   getVisible() {
@@ -285,81 +185,135 @@ const crud = {
       if (state.filter === 'completed') return  t.completed;
       return true;
     });
-
     if (state.sort === 'priority') {
-      list = [...list].sort((a,b) =>
+      list = [...list].sort((a, b) =>
         utils.priorityOrder[a.priority] - utils.priorityOrder[b.priority]
       );
     } else if (state.sort === 'dueDate') {
-      list = [...list].sort((a,b) => {
+      list = [...list].sort((a, b) => {
         if (!a.dueDate && !b.dueDate) return 0;
         if (!a.dueDate) return 1;
         if (!b.dueDate) return -1;
         return a.dueDate.localeCompare(b.dueDate);
       });
     } else if (state.sort === 'created') {
-      list = [...list].sort((a,b) => b.createdAt - a.createdAt);
+      list = [...list].sort((a, b) => b.createdAt - a.createdAt);
     }
     return list;
   },
 };
 
+// IDs of tasks currently being synced — drives sync-button state without stale DOM refs.
+const syncingIds = new Set();
+
 /* ═══════════════════════════════════════════════
-   5. UI RENDERING
+   4. DOM — cached once in initDOM(), never re-queried
 ═══════════════════════════════════════════════ */
+let DOM = {};
+
+function initDOM() {
+  DOM = {
+    // List & status
+    taskList:      document.getElementById('task-list'),
+    emptyState:    document.getElementById('empty-state'),
+    overdueBanner: document.getElementById('overdue-banner'),
+    overdueText:   document.getElementById('overdue-text'),
+    pageSubtitle:  document.getElementById('page-subtitle'),
+
+    // Add form
+    newTaskInput:  document.getElementById('new-task-input'),
+    newPriority:   document.getElementById('new-priority'),
+    newDate:       document.getElementById('new-date'),
+    newSyncToggle: document.getElementById('new-sync-toggle'),
+    addTaskBtn:    document.getElementById('add-task-btn'),
+    addCalLabel:   document.getElementById('add-cal-label'),
+
+    // Sidebar
+    navItems:          document.querySelectorAll('.nav-item'),
+    sortSelect:        document.getElementById('sort-select'),
+    clearCompletedBtn: document.getElementById('clear-completed-btn'),
+    gcalSyncAllBtn:    document.getElementById('gcal-sync-all-btn'),
+
+    // Edit modal
+    modal:           document.getElementById('edit-modal'),
+    modalText:       document.getElementById('modal-text'),
+    modalPriority:   document.getElementById('modal-priority'),
+    modalDate:       document.getElementById('modal-date'),
+    modalSyncToggle: document.getElementById('modal-sync-toggle'),
+    modalSaveBtn:    document.getElementById('modal-save-btn'),
+    modalCancelBtn:  document.getElementById('modal-cancel-btn'),
+    modalCloseBtn:   document.getElementById('modal-close-btn'),
+
+    // Nav container — used for event delegation instead of per-item listeners
+    sidebarNav: document.querySelector('.sidebar-nav'),
+
+    // Setup modal — owned by googleCalendar.js, referenced for Escape handling
+    setupModal: document.getElementById('setup-modal'),
+  };
+}
+
+/* ═══════════════════════════════════════════════
+   5. UI — reads state + store, never mutates them
+═══════════════════════════════════════════════ */
+
+// Single entry point for all re-renders — batches synchronous bursts into one paint.
+let _renderPending = false;
+function render() {
+  if (_renderPending) return;
+  _renderPending = true;
+  requestAnimationFrame(() => {
+    _renderPending = false;
+    ui.render();
+  });
+}
+
 const ui = {
   render() {
-    const visible   = crud.getVisible();
+    const visible   = store.getVisible();
     const all       = state.todos;
     const active    = all.filter(t => !t.completed);
-    const completed = all.filter(t => t.completed);
+    const completed = all.filter(t =>  t.completed);
     const overdue   = active.filter(t => utils.isOverdue(t.dueDate));
 
-    // Badges
-    DOM.badgeAll().textContent       = all.length;
-    DOM.badgeActive().textContent    = active.length;
-    DOM.badgeCompleted().textContent = completed.length;
+    // Nav badges — each badge lives inside its button (data-filter is the shared key)
+    const counts = { all: all.length, active: active.length, completed: completed.length };
+    DOM.navItems.forEach(btn => {
+      const badge = btn.querySelector('.nav-badge');
+      if (badge) badge.textContent = counts[btn.dataset.filter] ?? 0;
+    });
 
     // Subtitle
-    DOM.pageSubtitle().textContent = active.length === 0
+    DOM.pageSubtitle.textContent = active.length === 0
       ? 'Nothing pending — great job! 🎉'
       : active.length === 1
         ? '1 task remaining.'
         : `${active.length} tasks remaining.`;
 
     // Overdue banner
-    const ob = DOM.overdueBanner();
-    ob.hidden = overdue.length === 0;
+    DOM.overdueBanner.hidden = overdue.length === 0;
     if (overdue.length > 0) {
-      DOM.overdueText().textContent = overdue.length === 1
+      DOM.overdueText.textContent = overdue.length === 1
         ? '1 task is overdue'
         : `${overdue.length} tasks are overdue`;
     }
 
-    // Empty state
-    const es = DOM.emptyState();
-    es.hidden = visible.length > 0;
+    // Empty state — messages come from data-* attributes set in HTML
+    DOM.emptyState.hidden = visible.length > 0;
     if (visible.length === 0) {
-      const msgs = {
-        completed: ['No completed tasks yet',      'Finish something to see it here.'],
-        active:    ['All done!',                   'Everything is taken care of.'],
-        all:       ['All clear here',              'Add your first task above to get started.'],
-      };
-      const [title, sub] = msgs[state.filter] || msgs.all;
-      DOM.emptyTitle().textContent = title;
-      DOM.emptySub().textContent   = sub;
+      const key = state.filter[0].toUpperCase() + state.filter.slice(1);
+      DOM.emptyState.querySelector('.empty-title').textContent = DOM.emptyState.dataset['msg' + key];
+      DOM.emptyState.querySelector('.empty-sub').textContent   = DOM.emptyState.dataset['sub' + key];
     }
 
-    // Build task list via DocumentFragment (one DOM write)
+    // Task list — one DOM write via DocumentFragment
     const frag = document.createDocumentFragment();
     visible.forEach(todo => frag.appendChild(ui.buildTaskEl(todo)));
-    DOM.taskList().innerHTML = '';
-    DOM.taskList().appendChild(frag);
+    DOM.taskList.innerHTML = '';
+    DOM.taskList.appendChild(frag);
   },
 
   buildTaskEl(todo) {
     const isOverdue = !todo.completed && utils.isOverdue(todo.dueDate);
-    const isSynced  = todo.calSync && !!todo.calEventId;
 
     const li = document.createElement('li');
     li.className = [
@@ -375,21 +329,17 @@ const ui = {
     li.innerHTML = `
       <span class="drag-handle" aria-hidden="true">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-          <circle cx="4.5" cy="3.5" r="1" fill="currentColor"/>
-          <circle cx="4.5" cy="7"   r="1" fill="currentColor"/>
+          <circle cx="4.5" cy="3.5"  r="1" fill="currentColor"/>
+          <circle cx="4.5" cy="7"    r="1" fill="currentColor"/>
           <circle cx="4.5" cy="10.5" r="1" fill="currentColor"/>
-          <circle cx="9.5" cy="3.5" r="1" fill="currentColor"/>
-          <circle cx="9.5" cy="7"   r="1" fill="currentColor"/>
+          <circle cx="9.5" cy="3.5"  r="1" fill="currentColor"/>
+          <circle cx="9.5" cy="7"    r="1" fill="currentColor"/>
           <circle cx="9.5" cy="10.5" r="1" fill="currentColor"/>
         </svg>
       </span>
 
-      <input
-        type="checkbox"
-        class="task-checkbox"
-        aria-label="Mark complete"
-        ${todo.completed ? 'checked' : ''}
-      />
+      <input type="checkbox" class="task-checkbox" aria-label="Mark complete"
+        ${todo.completed ? 'checked' : ''} />
 
       <div class="task-content">
         <span class="task-text">${utils.escapeHTML(todo.text)}</span>
@@ -416,29 +366,7 @@ const ui = {
       </div>
     `;
 
-    // Event listeners
-    li.querySelector('.task-checkbox').addEventListener('change', () => {
-      crud.toggle(todo.id);
-      ui.render();
-    });
-    li.querySelector('.edit-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      modal.open(todo.id);
-    });
-    li.querySelector('.delete-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      ui.removeWithAnimation(li, todo.id);
-    });
-
-    // Sync button (quick-sync per task)
-    const syncBtn = li.querySelector('.sync-btn');
-    if (syncBtn) {
-      syncBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        ui.handleQuickSync(todo, syncBtn);
-      });
-    }
-
+    // Drag-and-drop stays per-element (drag events don't delegate cleanly to a container)
     dnd.bindToEl(li);
     return li;
   },
@@ -472,8 +400,7 @@ const ui = {
   },
 
   buildCalBadge(todo) {
-    const gcal = window.googleCalendar;
-    if (!gcal?.isAuthenticated() || !todo.calSync) return '';
+    if (!window.googleCalendar?.isAuthenticated() || !todo.calSync) return '';
     if (todo.calEventId) {
       return `<span class="meta-badge badge--gcal" title="Synced to Google Calendar">
         <svg width="9" height="9" viewBox="0 0 24 24" fill="none">
@@ -484,26 +411,24 @@ const ui = {
         Cal
       </span>`;
     }
-    if (todo.calSync) {
-      return `<span class="meta-badge badge--gcal is-syncing" title="Pending sync">
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none">
-          <path d="M4 4v5h5M20 20v-5h-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
-          <path d="M20 9a8 8 0 00-14.9-2.3M4 15a8 8 0 0014.9 2.3" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
-        </svg>
-        Syncing…
-      </span>`;
-    }
-    return '';
+    return `<span class="meta-badge badge--gcal is-syncing" title="Pending sync">
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="none">
+        <path d="M4 4v5h5M20 20v-5h-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M20 9a8 8 0 00-14.9-2.3M4 15a8 8 0 0014.9 2.3" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      Syncing…
+    </span>`;
   },
 
   buildSyncBtn(todo) {
-    const gcal = window.googleCalendar;
-    if (!gcal?.isAuthenticated()) return '';
-
-    const isSynced = todo.calSync && !!todo.calEventId;
-    const title    = isSynced ? 'Synced to Calendar (click to re-sync)' : 'Sync to Google Calendar';
+    if (!window.googleCalendar?.isAuthenticated()) return '';
+    const isSynced  = todo.calSync && !!todo.calEventId;
+    const isSyncing = syncingIds.has(todo.id);
+    const label     = isSynced ? 'Synced to Calendar (click to re-sync)' : 'Sync to Google Calendar';
     return `
-      <button class="task-action-btn sync-btn ${isSynced ? 'is-synced' : ''}" aria-label="${title}" title="${title}">
+      <button class="task-action-btn sync-btn ${isSynced ? 'is-synced' : ''} ${isSyncing ? 'is-syncing' : ''}"
+        ${isSyncing ? 'disabled' : ''}
+        aria-label="${label}" title="${label}">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
           <rect x="3" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8"/>
           <path d="M3 9h18" stroke="currentColor" stroke-width="1.8"/>
@@ -512,54 +437,20 @@ const ui = {
       </button>`;
   },
 
-  async handleQuickSync(todo, btn) {
-    if (!window.googleCalendar?.isAuthenticated()) {
-      window.googleCalendar?.openSetupModal();
-      return;
-    }
-    btn.classList.add('is-syncing');
-    btn.disabled = true;
-
-    // Toggle calSync on
-    todo.calSync = true;
-    const result = await window.googleCalendar.syncTodo(todo);
-    if (result.success) {
-      todo.calEventId  = result.eventId;
-      todo.calSyncedAt = Date.now();
-      const t = state.todos.find(t => t.id === todo.id);
-      if (t) { t.calSync = true; t.calEventId = result.eventId; t.calSyncedAt = todo.calSyncedAt; }
-      crud.save();
-    }
-
-    btn.classList.remove('is-syncing');
-    btn.disabled = false;
-    ui.render();
-  },
-
-  removeWithAnimation(el, id) {
+  // Animate an item out, then invoke onDone for the actual removal + re-render.
+  animateRemove(el, onDone) {
     el.style.transition = 'opacity 180ms ease, transform 180ms ease, max-height 220ms ease 60ms, margin 220ms ease 60ms, padding 220ms ease 60ms';
     el.style.overflow   = 'hidden';
     el.style.maxHeight  = el.offsetHeight + 'px';
     requestAnimationFrame(() => {
-      el.style.opacity      = '0';
-      el.style.transform    = 'translateX(8px)';
-      el.style.maxHeight    = '0';
-      el.style.marginBottom = '0';
-      el.style.paddingTop   = '0';
+      el.style.opacity       = '0';
+      el.style.transform     = 'translateX(8px)';
+      el.style.maxHeight     = '0';
+      el.style.marginBottom  = '0';
+      el.style.paddingTop    = '0';
       el.style.paddingBottom = '0';
     });
-    setTimeout(() => {
-      crud.remove(id);
-      ui.render();
-    }, 280);
-  },
-
-  setFilter(filter) {
-    state.filter = filter;
-    DOM.navItems().forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.filter === filter);
-    });
-    ui.render();
+    setTimeout(onDone, 280);
   },
 };
 
@@ -615,146 +506,267 @@ const dnd = {
     e.currentTarget.classList.remove('drag-over');
     const { draggedId, overId } = state.dragState;
     if (!draggedId || !overId || draggedId === overId) return;
-    crud.reorder(draggedId, overId);
-    state.sort = 'manual';
-    DOM.sortSelect().value = 'manual';
-    ui.render();
+    controller.reorder(draggedId, overId);
   },
 };
 
 /* ═══════════════════════════════════════════════
-   7. MODAL
+   7. MODAL — form helpers only
+   Saving is handled by controller.saveEdit()
 ═══════════════════════════════════════════════ */
 const modal = {
   open(id) {
-    const todo = state.todos.find(t => t.id === id);
+    const todo = store.find(id);
     if (!todo) return;
     state.editingId = id;
 
-    DOM.modalText().value     = todo.text;
-    DOM.modalPriority().value = todo.priority;
-    DOM.modalDate().value     = todo.dueDate || '';
-    DOM.modalSyncToggle().checked = !!todo.calSync;
+    DOM.modalText.value         = todo.text;
+    DOM.modalPriority.value     = todo.priority;
+    DOM.modalDate.value         = todo.dueDate || '';
+    DOM.modalSyncToggle.checked = !!todo.calSync;
 
-    DOM.modal().hidden = false;
+    DOM.modal.hidden = false;
     document.body.style.overflow = 'hidden';
-    requestAnimationFrame(() => DOM.modalText().focus());
+    requestAnimationFrame(() => DOM.modalText.focus());
   },
 
   close() {
-    DOM.modal().hidden = true;
+    DOM.modal.hidden = true;
     document.body.style.overflow = '';
     state.editingId = null;
   },
 
-  save() {
-    const id = state.editingId;
-    if (!id) return;
-    const text = DOM.modalText().value.trim();
-    if (!text) { DOM.modalText().focus(); return; }
-
-    crud.update(id, {
-      text,
-      priority: DOM.modalPriority().value,
-      dueDate:  DOM.modalDate().value,
-      calSync:  DOM.modalSyncToggle().checked,
-    });
-    modal.close();
-    ui.render();
+  // Returns raw form values — controller decides what to do with them.
+  readForm() {
+    return {
+      text:     DOM.modalText.value.trim(),
+      priority: DOM.modalPriority.value,
+      dueDate:  DOM.modalDate.value,
+      calSync:  DOM.modalSyncToggle.checked,
+    };
   },
 };
 
 /* ═══════════════════════════════════════════════
-   8. EVENT BINDING
+   8. CONTROLLER — user actions → store → render
+
+   applyCalSync — shared sync-then-persist pattern used by addTask, saveEdit, quickSync.
+   Mutates todo.calEventId/calSyncedAt and calls store.save() on success.
+   Returns true if the sync succeeded.
 ═══════════════════════════════════════════════ */
-function bindEvents() {
-  // Add task
-  DOM.addTaskBtn().addEventListener('click', handleAddTask);
-  DOM.newTaskInput().addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handleAddTask();
-  });
-
-  // Nav filters
-  DOM.navItems().forEach(btn => {
-    btn.addEventListener('click', () => ui.setFilter(btn.dataset.filter));
-  });
-
-  // Sort
-  DOM.sortSelect().addEventListener('change', (e) => {
-    state.sort = e.target.value;
-    ui.render();
-  });
-
-  // Clear completed
-  DOM.clearCompletedBtn().addEventListener('click', () => {
-    if (state.todos.some(t => t.completed)) {
-      crud.clearCompleted();
-      ui.render();
-    }
-  });
-
-  // Google Calendar — sync all
-  DOM.gcalSyncAllBtn()?.addEventListener('click', () => {
-    window.googleCalendar?.syncAllTodos(state.todos, crud.updateCalFields.bind(crud));
-  });
-
-  // Edit modal
-  DOM.modalSaveBtn().addEventListener('click',   modal.save);
-  DOM.modalCancelBtn().addEventListener('click', modal.close);
-  DOM.modalCloseBtn().addEventListener('click',  modal.close);
-  DOM.modal().addEventListener('click', (e) => {
-    if (e.target === DOM.modal()) modal.close();
-  });
-
-  // Global keyboard
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      if (!DOM.modal().hidden) { modal.close(); return; }
-      const setup = document.getElementById('setup-modal');
-      if (setup && !setup.hidden) { window.googleCalendar?.closeSetupModal(); return; }
-    }
-    if (e.key === 'Enter' && !DOM.modal().hidden) {
-      // Only save if focus is not on cancel button
-      if (document.activeElement !== DOM.modalCancelBtn()) modal.save();
-    }
-  });
-}
-
-function handleAddTask() {
-  const input    = DOM.newTaskInput();
-  const text     = input.value.trim();
-  if (!text) { input.focus(); return; }
-
-  const priority  = DOM.newPriority().value;
-  const dueDate   = DOM.newDate().value;
-  const syncToggle = DOM.newSyncToggle();
-  const calSync   = syncToggle ? syncToggle.checked : false;
-
-  crud.add(text, priority, dueDate, calSync);
-
-  // Reset form
-  input.value                   = '';
-  DOM.newDate().value           = '';
-  DOM.newPriority().value       = 'medium';
-  if (syncToggle) {
-    syncToggle.checked = false;
-    document.getElementById('add-cal-label')?.classList.remove('is-checked');
+async function applyCalSync(todo) {
+  const gcal = window.googleCalendar;
+  if (!gcal?.isAuthenticated()) return false;
+  const result = await gcal.syncTodo(todo);
+  if (result.success) {
+    todo.calEventId  = result.eventId;
+    todo.calSyncedAt = Date.now();
+    store.save();
+    return true;
   }
-  input.focus();
-  ui.render();
+  return false;
 }
 
 /* ═══════════════════════════════════════════════
-   9. INIT
+   8. CONTROLLER (continued)
+   The only layer allowed to call render().
+   GCal async operations are handled here so that
+   store stays synchronous and UI-free.
+═══════════════════════════════════════════════ */
+const controller = {
+  async addTask() {
+    const text = DOM.newTaskInput.value.trim();
+    if (!text) { DOM.newTaskInput.focus(); return; }
+
+    const calSync = DOM.newSyncToggle?.checked ?? false;
+    const todo = store.add(text, DOM.newPriority.value, DOM.newDate.value, calSync);
+
+    // Reset add form
+    DOM.newTaskInput.value = '';
+    DOM.newDate.value      = '';
+    DOM.newPriority.value  = 'medium';
+    if (DOM.newSyncToggle) {
+      DOM.newSyncToggle.checked = false;
+      DOM.addCalLabel?.classList.remove('is-checked');
+    }
+    DOM.newTaskInput.focus();
+    render();
+
+    // Re-render once GCal assigns an event ID (shows the Cal badge)
+    if (calSync) {
+      const synced = await applyCalSync(todo);
+      if (synced) render();
+    }
+  },
+
+  toggleTask(id) {
+    const todo = store.toggle(id);
+    render();
+    // Silent calendar update — no re-render needed
+    if (todo?.calSync && todo.calEventId && window.googleCalendar?.isAuthenticated()) {
+      window.googleCalendar.syncTodo(todo, { silent: true });
+    }
+  },
+
+  editTask(id) {
+    modal.open(id);
+  },
+
+  deleteTask(id, el) {
+    ui.animateRemove(el, () => {
+      const todo = store.remove(id);
+      if (todo?.calEventId && window.googleCalendar?.isAuthenticated()) {
+        window.googleCalendar.unsyncTodo(todo.calEventId, todo.text);
+      }
+      render();
+    });
+  },
+
+  async saveEdit() {
+    const id = state.editingId;
+    if (!id) return;
+
+    const form = modal.readForm();
+    if (!form.text) { DOM.modalText.focus(); return; }
+
+    const result = store.update(id, form);
+    modal.close();
+    render();
+
+    if (!result) return;
+    const { todo, prev } = result;
+    const gcal = window.googleCalendar;
+    if (!gcal?.isAuthenticated()) return;
+
+    if (form.calSync) {
+      const synced = await applyCalSync(todo);
+      if (synced) render();
+    } else if (prev.calSync && todo.calEventId) {
+      // Sync was turned off — remove the calendar event
+      await gcal.unsyncTodo(todo.calEventId, prev.text);
+      todo.calEventId  = null;
+      todo.calSyncedAt = null;
+      store.save();
+      render();
+    }
+  },
+
+  async quickSync(id) {
+    if (!window.googleCalendar?.isAuthenticated()) {
+      window.googleCalendar?.openSetupModal();
+      return;
+    }
+    if (syncingIds.has(id)) return; // prevent double-tap
+    const todo = store.find(id);
+    if (!todo) return;
+    todo.calSync = true;
+    syncingIds.add(id);
+    render(); // shows is-syncing state immediately
+    await applyCalSync(todo);
+    syncingIds.delete(id);
+    render(); // shows final Cal badge
+  },
+
+  clearCompleted() {
+    const removed = store.clearCompleted();
+    const gcal = window.googleCalendar;
+    if (gcal?.isAuthenticated()) {
+      removed.filter(t => t.calEventId).forEach(t => gcal.unsyncTodo(t.calEventId, t.text));
+    }
+    render();
+  },
+
+  setFilter(filter) {
+    state.filter = filter;
+    DOM.navItems.forEach(btn => btn.classList.toggle('active', btn.dataset.filter === filter));
+    render();
+  },
+
+  setSort(value) {
+    state.sort = value;
+    render();
+  },
+
+  reorder(draggedId, overId) {
+    store.reorder(draggedId, overId);
+    state.sort = 'manual';
+    DOM.sortSelect.value = 'manual';
+    render();
+  },
+
+  syncAll() {
+    // Pass a combined callback: persist fields AND re-render per-todo
+    const onUpdated = (todo) => { store.updateCalFields(todo); render(); };
+    window.googleCalendar?.syncAllTodos(state.todos, onUpdated);
+  },
+};
+
+/* ═══════════════════════════════════════════════
+   9. EVENTS — thin wiring, delegates to controller
+═══════════════════════════════════════════════ */
+function bindEvents() {
+  // Add task
+  DOM.addTaskBtn.addEventListener('click', () => controller.addTask());
+  DOM.newTaskInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') controller.addTask();
+  });
+
+  // Task list — event delegation replaces per-element click/change listeners.
+  // DnD listeners remain per-element (see dnd.bindToEl in ui.buildTaskEl).
+  DOM.taskList.addEventListener('change', (e) => {
+    if (!e.target.matches('.task-checkbox')) return;
+    controller.toggleTask(e.target.closest('[data-id]').dataset.id);
+  });
+
+  DOM.taskList.addEventListener('click', (e) => {
+    const item = e.target.closest('[data-id]');
+    if (!item) return;
+    const id = item.dataset.id;
+    if (e.target.closest('.edit-btn'))   return controller.editTask(id);
+    if (e.target.closest('.delete-btn')) return controller.deleteTask(id, item);
+    if (e.target.closest('.sync-btn'))   return controller.quickSync(id);
+  });
+
+  // Sidebar nav — delegated to avoid per-item listeners
+  DOM.sidebarNav.addEventListener('click', (e) => {
+    const btn = e.target.closest('.nav-item[data-filter]');
+    if (btn) controller.setFilter(btn.dataset.filter);
+  });
+  DOM.sortSelect.addEventListener('change', (e) => controller.setSort(e.target.value));
+  DOM.clearCompletedBtn.addEventListener('click', () => {
+    if (state.todos.some(t => t.completed)) controller.clearCompleted();
+  });
+  DOM.gcalSyncAllBtn?.addEventListener('click', () => controller.syncAll());
+
+  // Edit modal
+  DOM.modalSaveBtn.addEventListener('click',   () => controller.saveEdit());
+  DOM.modalCancelBtn.addEventListener('click', () => modal.close());
+  DOM.modalCloseBtn.addEventListener('click',  () => modal.close());
+  DOM.modal.addEventListener('click', (e) => {
+    if (e.target === DOM.modal) modal.close();
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!DOM.modal.hidden)                       { modal.close(); return; }
+      if (DOM.setupModal && !DOM.setupModal.hidden) { window.googleCalendar?.closeSetupModal(); return; }
+    }
+    if (e.key === 'Enter' && !DOM.modal.hidden) {
+      if (document.activeElement !== DOM.modalCancelBtn) controller.saveEdit();
+    }
+  });
+}
+
+/* ═══════════════════════════════════════════════
+   10. INIT
 ═══════════════════════════════════════════════ */
 function init() {
-  crud.load();
+  initDOM();
+  store.load();
   bindEvents();
-
-  // Init Google Calendar module (defined in googleCalendar.js)
   window.googleCalendar?.init();
-
-  ui.render();
+  render();
 }
 
 document.addEventListener('DOMContentLoaded', init);
