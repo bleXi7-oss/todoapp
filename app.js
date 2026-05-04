@@ -18,51 +18,52 @@
    1. STATE
 ═══════════════════════════════════════════════ */
 const state = {
-  todos:       [],
-  filter:      'all',   // 'all' | 'active' | 'completed'
-  sort:        'manual', // 'manual' | 'priority' | 'dueDate' | 'created'
-  editingId:   null,    // id of task being edited in modal
-  dragState: {
-    draggedId:  null,
-    overId:     null,
-  },
+  todos:     [],
+  filter:    'all',    // 'all' | 'active' | 'completed'
+  sort:      'manual', // 'manual' | 'priority' | 'dueDate' | 'created'
+  editingId: null,
+  dragState: { draggedId: null, overId: null },
 };
 
-const STORAGE_KEY = 'doable_todos_v2';
+const STORAGE_KEY = 'doable_todos_v3'; // bumped from v2 to handle new fields
 
 /* ═══════════════════════════════════════════════
    2. DOM REFERENCES
 ═══════════════════════════════════════════════ */
 const DOM = {
-  taskList:        () => document.getElementById('task-list'),
-  emptyState:      () => document.getElementById('empty-state'),
-  emptyTitle:      () => document.getElementById('empty-title'),
-  emptySub:        () => document.getElementById('empty-sub'),
-  overdueBanner:   () => document.getElementById('overdue-banner'),
-  overdueText:     () => document.getElementById('overdue-text'),
-  pageSubtitle:    () => document.getElementById('page-subtitle'),
+  // List & empty
+  taskList:      () => document.getElementById('task-list'),
+  emptyState:    () => document.getElementById('empty-state'),
+  emptyTitle:    () => document.getElementById('empty-title'),
+  emptySub:      () => document.getElementById('empty-sub'),
+  overdueBanner: () => document.getElementById('overdue-banner'),
+  overdueText:   () => document.getElementById('overdue-text'),
+  pageSubtitle:  () => document.getElementById('page-subtitle'),
 
   // Add form
-  newTaskInput:    () => document.getElementById('new-task-input'),
-  newPriority:     () => document.getElementById('new-priority'),
-  newDate:         () => document.getElementById('new-date'),
-  addTaskBtn:      () => document.getElementById('add-task-btn'),
+  newTaskInput:  () => document.getElementById('new-task-input'),
+  newPriority:   () => document.getElementById('new-priority'),
+  newDate:       () => document.getElementById('new-date'),
+  newSyncToggle: () => document.getElementById('new-sync-toggle'),
+  addTaskBtn:    () => document.getElementById('add-task-btn'),
 
-  // Filters / sort
-  navItems:        () => document.querySelectorAll('.nav-item'),
-  sortSelect:      () => document.getElementById('sort-select'),
+  // Sidebar controls
+  navItems:          () => document.querySelectorAll('.nav-item'),
+  sortSelect:        () => document.getElementById('sort-select'),
   clearCompletedBtn: () => document.getElementById('clear-completed-btn'),
+  gcalSyncAllBtn:    () => document.getElementById('gcal-sync-all-btn'),
 
   // Badges
-  badgeAll:        () => document.getElementById('badge-all'),
-  badgeActive:     () => document.getElementById('badge-active'),
-  badgeCompleted:  () => document.getElementById('badge-completed'),
+  badgeAll:       () => document.getElementById('badge-all'),
+  badgeActive:    () => document.getElementById('badge-active'),
+  badgeCompleted: () => document.getElementById('badge-completed'),
 
-  // Modal
+  // Edit modal
   modal:           () => document.getElementById('edit-modal'),
   modalText:       () => document.getElementById('modal-text'),
   modalPriority:   () => document.getElementById('modal-priority'),
   modalDate:       () => document.getElementById('modal-date'),
+  modalSyncToggle: () => document.getElementById('modal-sync-toggle'),
   modalSaveBtn:    () => document.getElementById('modal-save-btn'),
   modalCancelBtn:  () => document.getElementById('modal-cancel-btn'),
   modalCloseBtn:   () => document.getElementById('modal-close-btn'),
@@ -72,7 +73,6 @@ const DOM = {
    3. UTILS
 ═══════════════════════════════════════════════ */
 const utils = {
-  /** Sanitise user text to prevent XSS */
   escapeHTML(str) {
     return String(str)
       .replace(/&/g, '&amp;')
@@ -82,39 +82,33 @@ const utils = {
       .replace(/'/g, '&#039;');
   },
 
-  /** Generate a simple unique id */
   uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   },
 
-  /** Return ISO date string for today (local time) */
   todayISO() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   },
 
-  /** Check if an ISO date string is strictly before today */
   isOverdue(dateISO) {
     if (!dateISO) return false;
     return dateISO < utils.todayISO();
   },
 
-  /** Format ISO date → readable string */
   formatDate(dateISO) {
     if (!dateISO) return '';
     const [y, m, d] = dateISO.split('-').map(Number);
-    const date = new Date(y, m - 1, d);
+    const date  = new Date(y, m - 1, d);
     const today = new Date();
-    today.setHours(0,0,0,0);
+    today.setHours(0, 0, 0, 0);
     const diff = Math.round((date - today) / 86400000);
-
-    if (diff === 0) return 'Today';
-    if (diff === 1) return 'Tomorrow';
+    if (diff === 0)  return 'Today';
+    if (diff === 1)  return 'Tomorrow';
     if (diff === -1) return 'Yesterday';
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   },
 
-  /** Priority sort order */
   priorityOrder: { high: 0, medium: 1, low: 2 },
 };
 
@@ -126,6 +120,13 @@ const crud = {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       state.todos = raw ? JSON.parse(raw) : [];
+
+      // Migrate from v2: ensure new fields exist
+      state.todos.forEach(t => {
+        if (t.calSync      === undefined) t.calSync      = false;
+        if (t.calEventId   === undefined) t.calEventId   = null;
+        if (t.calSyncedAt  === undefined) t.calSyncedAt  = null;
+      });
     } catch {
       state.todos = [];
     }
@@ -135,53 +136,128 @@ const crud = {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state.todos));
     } catch (e) {
-      console.warn('Could not save to localStorage', e);
+      console.warn('localStorage write failed', e);
     }
   },
 
-  add(text, priority, dueDate) {
+  add(text, priority, dueDate, calSync = false) {
     const todo = {
-      id:        utils.uid(),
-      text:      text.trim(),
-      completed: false,
-      priority:  priority || 'medium',
-      dueDate:   dueDate || '',
-      createdAt: Date.now(),
+      id:          utils.uid(),
+      text:        text.trim(),
+      completed:   false,
+      priority:    priority || 'medium',
+      dueDate:     dueDate || '',
+      createdAt:   Date.now(),
+      // Calendar fields
+      calSync:     calSync,
+      calEventId:  null,
+      calSyncedAt: null,
     };
     state.todos.unshift(todo);
     crud.save();
+
+    // Sync to Google Calendar if requested
+    if (calSync && window.googleCalendar?.isAuthenticated()) {
+      window.googleCalendar.syncTodo(todo).then(result => {
+        if (result.success) {
+          todo.calEventId  = result.eventId;
+          todo.calSyncedAt = Date.now();
+          crud.save();
+          ui.render(); // re-render to show sync badge
+        }
+      });
+    }
+
     return todo;
   },
 
   toggle(id) {
     const todo = state.todos.find(t => t.id === id);
-    if (todo) {
-      todo.completed = !todo.completed;
-      crud.save();
+    if (!todo) return;
+    todo.completed = !todo.completed;
+    crud.save();
+
+    // Update calendar event status if synced
+    if (todo.calSync && todo.calEventId && window.googleCalendar?.isAuthenticated()) {
+      window.googleCalendar.syncTodo(todo, { silent: true });
     }
   },
 
-  update(id, { text, priority, dueDate }) {
+  update(id, { text, priority, dueDate, calSync }) {
     const todo = state.todos.find(t => t.id === id);
-    if (todo) {
-      if (text !== undefined)     todo.text     = text.trim();
-      if (priority !== undefined) todo.priority = priority;
-      if (dueDate !== undefined)  todo.dueDate  = dueDate;
-      crud.save();
+    if (!todo) return;
+
+    const wasText     = todo.text;
+    const wasSync     = todo.calSync;
+    const wasDueDate  = todo.dueDate;
+    const wasPriority = todo.priority;
+
+    if (text     !== undefined) todo.text     = text.trim();
+    if (priority !== undefined) todo.priority = priority;
+    if (dueDate  !== undefined) todo.dueDate  = dueDate;
+    if (calSync  !== undefined) todo.calSync  = calSync;
+    crud.save();
+
+    // Handle calendar sync
+    const gcal = window.googleCalendar;
+    if (!gcal) return;
+
+    const isAuth = gcal.isAuthenticated();
+
+    if (calSync && isAuth) {
+      // User wants sync: create or update event
+      gcal.syncTodo(todo).then(result => {
+        if (result.success) {
+          todo.calEventId  = result.eventId;
+          todo.calSyncedAt = Date.now();
+          crud.save();
+          ui.render();
+        }
+      });
+    } else if (!calSync && wasSync && todo.calEventId && isAuth) {
+      // User turned off sync: remove event
+      gcal.unsyncTodo(todo.calEventId, wasText).then(() => {
+        todo.calEventId  = null;
+        todo.calSyncedAt = null;
+        crud.save();
+        ui.render();
+      });
+    } else if (calSync && todo.calEventId && isAuth) {
+      // Content changed, event exists: patch it
+      const changed = text !== wasText || dueDate !== wasDueDate || priority !== wasPriority;
+      if (changed) {
+        gcal.syncTodo(todo).then(result => {
+          if (result.success) {
+            todo.calSyncedAt = Date.now();
+            crud.save();
+            ui.render();
+          }
+        });
+      }
     }
   },
 
   remove(id) {
+    const todo = state.todos.find(t => t.id === id);
+    // Delete from Google Calendar if synced
+    if (todo?.calEventId && window.googleCalendar?.isAuthenticated()) {
+      window.googleCalendar.unsyncTodo(todo.calEventId, todo.text);
+    }
     state.todos = state.todos.filter(t => t.id !== id);
     crud.save();
   },
 
   clearCompleted() {
+    const gcal = window.googleCalendar;
+    if (gcal?.isAuthenticated()) {
+      state.todos.filter(t => t.completed && t.calEventId).forEach(t => {
+        gcal.unsyncTodo(t.calEventId, t.text);
+      });
+    }
     state.todos = state.todos.filter(t => !t.completed);
     crud.save();
   },
 
-  /** Reorder: move dragged item before the over item */
   reorder(draggedId, overId) {
     if (draggedId === overId) return;
     const from = state.todos.findIndex(t => t.id === draggedId);
@@ -192,7 +268,17 @@ const crud = {
     crud.save();
   },
 
-  /** Get todos filtered and sorted for display */
+  // Called by gcal sync-all to persist updated event ids
+  updateCalFields(todo) {
+    const existing = state.todos.find(t => t.id === todo.id);
+    if (existing) {
+      existing.calEventId  = todo.calEventId;
+      existing.calSyncedAt = todo.calSyncedAt;
+    }
+    crud.save();
+    ui.render();
+  },
+
   getVisible() {
     let list = state.todos.filter(t => {
       if (state.filter === 'active')    return !t.completed;
@@ -214,8 +300,6 @@ const crud = {
     } else if (state.sort === 'created') {
       list = [...list].sort((a,b) => b.createdAt - a.createdAt);
     }
-    // 'manual' = state.todos order (preserved via reorder)
-
     return list;
   },
 };
@@ -224,13 +308,12 @@ const crud = {
    5. UI RENDERING
 ═══════════════════════════════════════════════ */
 const ui = {
-  /** Full re-render of the task list and surrounding chrome */
   render() {
-    const visible  = crud.getVisible();
-    const all      = state.todos;
-    const active   = all.filter(t => !t.completed);
+    const visible   = crud.getVisible();
+    const all       = state.todos;
+    const active    = all.filter(t => !t.completed);
     const completed = all.filter(t => t.completed);
-    const overdue  = active.filter(t => utils.isOverdue(t.dueDate));
+    const overdue   = active.filter(t => utils.isOverdue(t.dueDate));
 
     // Badges
     DOM.badgeAll().textContent       = all.length;
@@ -246,48 +329,38 @@ const ui = {
 
     // Overdue banner
     const ob = DOM.overdueBanner();
+    ob.hidden = overdue.length === 0;
     if (overdue.length > 0) {
-      ob.hidden = false;
       DOM.overdueText().textContent = overdue.length === 1
         ? '1 task is overdue'
         : `${overdue.length} tasks are overdue`;
-    } else {
-      ob.hidden = true;
     }
 
     // Empty state
     const es = DOM.emptyState();
+    es.hidden = visible.length > 0;
     if (visible.length === 0) {
-      es.hidden = false;
-      if (state.filter === 'completed') {
-        DOM.emptyTitle().textContent = 'No completed tasks yet';
-        DOM.emptySub().textContent   = 'Finish something to see it here.';
-      } else if (state.filter === 'active') {
-        DOM.emptyTitle().textContent = 'All done!';
-        DOM.emptySub().textContent   = 'Everything is taken care of.';
-      } else {
-        DOM.emptyTitle().textContent = 'All clear here';
-        DOM.emptySub().textContent   = 'Add your first task above to get started.';
-      }
-    } else {
-      es.hidden = true;
+      const msgs = {
+        completed: ['No completed tasks yet',      'Finish something to see it here.'],
+        active:    ['All done!',                   'Everything is taken care of.'],
+        all:       ['All clear here',              'Add your first task above to get started.'],
+      };
+      const [title, sub] = msgs[state.filter] || msgs.all;
+      DOM.emptyTitle().textContent = title;
+      DOM.emptySub().textContent   = sub;
     }
 
-    // Task list — use fragment for performance
-    const list = DOM.taskList();
+    // Build task list via DocumentFragment (one DOM write)
     const frag = document.createDocumentFragment();
-
-    visible.forEach(todo => {
-      frag.appendChild(ui.buildTaskEl(todo));
-    });
-
-    list.innerHTML = '';
-    list.appendChild(frag);
+    visible.forEach(todo => frag.appendChild(ui.buildTaskEl(todo)));
+    DOM.taskList().innerHTML = '';
+    DOM.taskList().appendChild(frag);
   },
 
-  /** Build a single task <li> element */
   buildTaskEl(todo) {
     const isOverdue = !todo.completed && utils.isOverdue(todo.dueDate);
+    const isSynced  = todo.calSync && !!todo.calEventId;
+
     const li = document.createElement('li');
     li.className = [
       'task-item',
@@ -323,10 +396,12 @@ const ui = {
         <div class="task-meta">
           ${ui.buildPriorityBadge(todo.priority)}
           ${ui.buildDateMeta(todo.dueDate, isOverdue)}
+          ${ui.buildCalBadge(todo)}
         </div>
       </div>
 
       <div class="task-actions" role="group" aria-label="Task actions">
+        ${ui.buildSyncBtn(todo)}
         <button class="task-action-btn edit-btn" aria-label="Edit task" title="Edit">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             <path d="M9.5 2.5l2 2-7 7H2.5v-2l7-7z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
@@ -334,13 +409,14 @@ const ui = {
         </button>
         <button class="task-action-btn delete-btn" aria-label="Delete task" title="Delete">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M2 4h10M5 4V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V4M10 4l-.7 7.5a.5.5 0 01-.5.5H5.2a.5.5 0 01-.5-.5L4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 4h10M5 4V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V4M10 4l-.7 7.5a.5.5 0 01-.5.5H5.2a.5.5 0 01-.5-.5L4 4"
+              stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
       </div>
     `;
 
-    // Wire up events directly on the element
+    // Event listeners
     li.querySelector('.task-checkbox').addEventListener('change', () => {
       crud.toggle(todo.id);
       ui.render();
@@ -354,9 +430,16 @@ const ui = {
       ui.removeWithAnimation(li, todo.id);
     });
 
-    // Drag events
-    dnd.bindToEl(li);
+    // Sync button (quick-sync per task)
+    const syncBtn = li.querySelector('.sync-btn');
+    if (syncBtn) {
+      syncBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        ui.handleQuickSync(todo, syncBtn);
+      });
+    }
 
+    dnd.bindToEl(li);
     return li;
   },
 
@@ -371,26 +454,96 @@ const ui = {
     if (isOverdue) {
       return `
         <span class="meta-badge badge--overdue">
-          <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><circle cx="4.5" cy="4.5" r="4" stroke="currentColor" stroke-width="1.1"/><path d="M4.5 2.5v2.2M4.5 6.2v.3" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+          <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
+            <circle cx="4.5" cy="4.5" r="4" stroke="currentColor" stroke-width="1.1"/>
+            <path d="M4.5 2.5v2.2M4.5 6.2v.3" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+          </svg>
           Overdue · ${label}
         </span>`;
     }
     return `
       <span class="meta-date">
-        <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><rect x="1" y="2" width="9" height="8" rx="1.5" stroke="currentColor" stroke-width="1.1"/><path d="M3.5 1v2M7.5 1v2M1 5h9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+          <rect x="1" y="2" width="9" height="8" rx="1.5" stroke="currentColor" stroke-width="1.1"/>
+          <path d="M3.5 1v2M7.5 1v2M1 5h9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+        </svg>
         ${label}
       </span>`;
   },
 
-  /** Animate removal then delete from state */
+  buildCalBadge(todo) {
+    const gcal = window.googleCalendar;
+    if (!gcal?.isAuthenticated() || !todo.calSync) return '';
+    if (todo.calEventId) {
+      return `<span class="meta-badge badge--gcal" title="Synced to Google Calendar">
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="2.2"/>
+          <path d="M3 9h18" stroke="currentColor" stroke-width="2.2"/>
+          <path d="M8 2v4M16 2v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        </svg>
+        Cal
+      </span>`;
+    }
+    if (todo.calSync) {
+      return `<span class="meta-badge badge--gcal is-syncing" title="Pending sync">
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none">
+          <path d="M4 4v5h5M20 20v-5h-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M20 9a8 8 0 00-14.9-2.3M4 15a8 8 0 0014.9 2.3" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        Syncing…
+      </span>`;
+    }
+    return '';
+  },
+
+  buildSyncBtn(todo) {
+    const gcal = window.googleCalendar;
+    if (!gcal?.isAuthenticated()) return '';
+
+    const isSynced = todo.calSync && !!todo.calEventId;
+    const title    = isSynced ? 'Synced to Calendar (click to re-sync)' : 'Sync to Google Calendar';
+    return `
+      <button class="task-action-btn sync-btn ${isSynced ? 'is-synced' : ''}" aria-label="${title}" title="${title}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M3 9h18" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M8 2v4M16 2v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </button>`;
+  },
+
+  async handleQuickSync(todo, btn) {
+    if (!window.googleCalendar?.isAuthenticated()) {
+      window.googleCalendar?.openSetupModal();
+      return;
+    }
+    btn.classList.add('is-syncing');
+    btn.disabled = true;
+
+    // Toggle calSync on
+    todo.calSync = true;
+    const result = await window.googleCalendar.syncTodo(todo);
+    if (result.success) {
+      todo.calEventId  = result.eventId;
+      todo.calSyncedAt = Date.now();
+      const t = state.todos.find(t => t.id === todo.id);
+      if (t) { t.calSync = true; t.calEventId = result.eventId; t.calSyncedAt = todo.calSyncedAt; }
+      crud.save();
+    }
+
+    btn.classList.remove('is-syncing');
+    btn.disabled = false;
+    ui.render();
+  },
+
   removeWithAnimation(el, id) {
     el.style.transition = 'opacity 180ms ease, transform 180ms ease, max-height 220ms ease 60ms, margin 220ms ease 60ms, padding 220ms ease 60ms';
     el.style.overflow   = 'hidden';
     el.style.maxHeight  = el.offsetHeight + 'px';
     requestAnimationFrame(() => {
-      el.style.opacity   = '0';
-      el.style.transform = 'translateX(8px)';
-      el.style.maxHeight = '0';
+      el.style.opacity      = '0';
+      el.style.transform    = 'translateX(8px)';
+      el.style.maxHeight    = '0';
       el.style.marginBottom = '0';
       el.style.paddingTop   = '0';
       el.style.paddingBottom = '0';
@@ -401,7 +554,6 @@ const ui = {
     }, 280);
   },
 
-  /** Update nav active state */
   setFilter(filter) {
     state.filter = filter;
     DOM.navItems().forEach(btn => {
@@ -425,22 +577,15 @@ const dnd = {
   },
 
   onDragStart(e) {
-    const id = e.currentTarget.dataset.id;
-    state.dragState.draggedId = id;
+    state.dragState.draggedId = e.currentTarget.dataset.id;
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', id);
-    // Delay class so the ghost image captures the un-dimmed state
-    requestAnimationFrame(() => {
-      e.currentTarget.classList.add('dragging');
-    });
+    e.dataTransfer.setData('text/plain', state.dragState.draggedId);
+    requestAnimationFrame(() => e.currentTarget.classList.add('dragging'));
   },
 
   onDragEnd(e) {
     e.currentTarget.classList.remove('dragging');
-    // Clean up all drag-over highlights
-    document.querySelectorAll('.task-item.drag-over').forEach(el => {
-      el.classList.remove('drag-over');
-    });
+    document.querySelectorAll('.task-item.drag-over').forEach(el => el.classList.remove('drag-over'));
     state.dragState.draggedId = null;
     state.dragState.overId    = null;
   },
@@ -460,7 +605,6 @@ const dnd = {
   },
 
   onDragLeave(e) {
-    // Only remove if leaving the element entirely (not a child)
     if (!e.currentTarget.contains(e.relatedTarget)) {
       e.currentTarget.classList.remove('drag-over');
     }
@@ -472,7 +616,6 @@ const dnd = {
     const { draggedId, overId } = state.dragState;
     if (!draggedId || !overId || draggedId === overId) return;
     crud.reorder(draggedId, overId);
-    // Switch to manual sort so order is preserved
     state.sort = 'manual';
     DOM.sortSelect().value = 'manual';
     ui.render();
@@ -491,6 +634,7 @@ const modal = {
     DOM.modalText().value     = todo.text;
     DOM.modalPriority().value = todo.priority;
     DOM.modalDate().value     = todo.dueDate || '';
+    DOM.modalSyncToggle().checked = !!todo.calSync;
 
     DOM.modal().hidden = false;
     document.body.style.overflow = 'hidden';
@@ -507,14 +651,13 @@ const modal = {
     const id = state.editingId;
     if (!id) return;
     const text = DOM.modalText().value.trim();
-    if (!text) {
-      DOM.modalText().focus();
-      return;
-    }
+    if (!text) { DOM.modalText().focus(); return; }
+
     crud.update(id, {
       text,
       priority: DOM.modalPriority().value,
       dueDate:  DOM.modalDate().value,
+      calSync:  DOM.modalSyncToggle().checked,
     });
     modal.close();
     ui.render();
@@ -531,7 +674,7 @@ function bindEvents() {
     if (e.key === 'Enter') handleAddTask();
   });
 
-  // Filter nav
+  // Nav filters
   DOM.navItems().forEach(btn => {
     btn.addEventListener('click', () => ui.setFilter(btn.dataset.filter));
   });
@@ -550,41 +693,54 @@ function bindEvents() {
     }
   });
 
-  // Modal buttons
+  // Google Calendar — sync all
+  DOM.gcalSyncAllBtn()?.addEventListener('click', () => {
+    window.googleCalendar?.syncAllTodos(state.todos, crud.updateCalFields.bind(crud));
+  });
+
+  // Edit modal
   DOM.modalSaveBtn().addEventListener('click',   modal.save);
   DOM.modalCancelBtn().addEventListener('click', modal.close);
   DOM.modalCloseBtn().addEventListener('click',  modal.close);
-
-  // Close modal on backdrop click
   DOM.modal().addEventListener('click', (e) => {
     if (e.target === DOM.modal()) modal.close();
   });
 
-  // Close modal on Escape
+  // Global keyboard
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !DOM.modal().hidden) modal.close();
-    if (e.key === 'Enter'  && !DOM.modal().hidden) modal.save();
+    if (e.key === 'Escape') {
+      if (!DOM.modal().hidden) { modal.close(); return; }
+      const setup = document.getElementById('setup-modal');
+      if (setup && !setup.hidden) { window.googleCalendar?.closeSetupModal(); return; }
+    }
+    if (e.key === 'Enter' && !DOM.modal().hidden) {
+      // Only save if focus is not on cancel button
+      if (document.activeElement !== DOM.modalCancelBtn()) modal.save();
+    }
   });
 }
 
 function handleAddTask() {
   const input    = DOM.newTaskInput();
   const text     = input.value.trim();
-  if (!text) {
-    input.focus();
-    return;
-  }
-  const priority = DOM.newPriority().value;
-  const dueDate  = DOM.newDate().value;
+  if (!text) { input.focus(); return; }
 
-  crud.add(text, priority, dueDate);
+  const priority  = DOM.newPriority().value;
+  const dueDate   = DOM.newDate().value;
+  const syncToggle = DOM.newSyncToggle();
+  const calSync   = syncToggle ? syncToggle.checked : false;
+
+  crud.add(text, priority, dueDate, calSync);
 
   // Reset form
-  input.value          = '';
-  DOM.newDate().value  = '';
-  DOM.newPriority().value = 'medium';
+  input.value                   = '';
+  DOM.newDate().value           = '';
+  DOM.newPriority().value       = 'medium';
+  if (syncToggle) {
+    syncToggle.checked = false;
+    document.getElementById('add-cal-label')?.classList.remove('is-checked');
+  }
   input.focus();
-
   ui.render();
 }
 
@@ -594,6 +750,10 @@ function handleAddTask() {
 function init() {
   crud.load();
   bindEvents();
+
+  // Init Google Calendar module (defined in googleCalendar.js)
+  window.googleCalendar?.init();
+
   ui.render();
 }
 
