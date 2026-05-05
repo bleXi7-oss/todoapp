@@ -38,7 +38,11 @@ const GCAL_STORAGE_KEY      = 'doable_gcal_token';
 const GCAL_USER_KEY         = 'doable_gcal_user';
 const GCAL_CLIENT_ID_KEY    = 'doable_gcal_client_id';
 const GCAL_CALENDAR_ID      = 'primary';
-const GCAL_SCOPE            = 'https://www.googleapis.com/auth/calendar.events';
+const GCAL_SCOPE            = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/userinfo.email',
+].join(' ');
 const GCAL_API_BASE         = 'https://www.googleapis.com/calendar/v3';
 const GCAL_PEOPLE_API       = 'https://www.googleapis.com/oauth2/v3/userinfo';
 const TOKEN_EXPIRY_BUFFER   = 5 * 60 * 1000; // refresh 5 min before expiry
@@ -167,14 +171,23 @@ async function handleTokenResponse(resp) {
 
   gcalLog.add('info', 'OAuth token received. Fetching user profile…');
 
-  // Fetch user profile
+  // Use raw fetch — routing through gcalFetch would clear the token on any 401
+  // (e.g. if the app previously ran with fewer scopes and the cached grant is stale).
   try {
-    const profile = await gcalFetch(GCAL_PEOPLE_API);
-    userStore.set({
-      name:    profile.name || 'Google Account',
-      email:   profile.email || '',
-      picture: profile.picture || '',
+    const res = await fetch(GCAL_PEOPLE_API, {
+      headers: { 'Authorization': `Bearer ${tokenStore.getAccessToken()}` },
     });
+    if (res.ok) {
+      const profile = await res.json();
+      userStore.set({
+        name:    profile.name    || 'Google Account',
+        email:   profile.email   || '',
+        picture: profile.picture || '',
+      });
+    } else {
+      gcalLog.add('error', `Profile fetch failed (${res.status}) — check OAuth scopes.`);
+      userStore.set({ name: 'Google Account', email: '', picture: '' });
+    }
   } catch {
     userStore.set({ name: 'Google Account', email: '', picture: '' });
   }
@@ -513,6 +526,7 @@ function cacheDOM() {
   gcalDOM.logList        = document.getElementById('sync-log-list');
   gcalDOM.toastContainer = document.getElementById('toast-container');
   gcalDOM.newSyncToggle  = document.getElementById('new-sync-toggle');
+  gcalDOM.connectedBadge = document.getElementById('gcal-connected-badge'); // may be null — created lazily
 }
 
 /* ═══════════════════════════════════════════════
@@ -532,10 +546,28 @@ const gcalUI = {
         gcalDOM.userName.textContent = user.name || user.email || 'Google Account';
       }
       if (gcalDOM.avatar && user) {
-        gcalDOM.avatar.innerHTML = user.picture
-          ? `<img src="${user.picture}" alt="${user.name}" />`
-          : (user.name || 'G')[0].toUpperCase();
+        if (user.picture) {
+          const img = document.createElement('img');
+          img.src = user.picture;
+          img.alt = '';
+          gcalDOM.avatar.replaceChildren(img);
+        } else {
+          gcalDOM.avatar.textContent = (user.name || 'G')[0].toUpperCase();
+        }
       }
+
+      // Create badge lazily if the HTML doesn't already include one
+      if (!gcalDOM.connectedBadge && gcalDOM.loggedIn) {
+        const badge = document.createElement('span');
+        badge.id        = 'gcal-connected-badge';
+        badge.className = 'gcal-connected-badge';
+        badge.innerHTML = '<span aria-hidden="true" style="color:#16a34a;font-size:.6em;vertical-align:middle;">●</span> Connected to Google';
+        gcalDOM.loggedIn.appendChild(badge);
+        gcalDOM.connectedBadge = badge;
+      }
+      if (gcalDOM.connectedBadge) gcalDOM.connectedBadge.hidden = false;
+    } else {
+      if (gcalDOM.connectedBadge) gcalDOM.connectedBadge.hidden = true;
     }
 
     if (gcalDOM.addCalLabel)  gcalDOM.addCalLabel.style.display  = isAuth ? '' : 'none';
