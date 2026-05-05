@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Solid background — required for Android PWA icon (no transparency) -->
+  <rect width="512" height="512" fill="#1a1916"/>
+  <!-- Doable brand mark: 2×2 grid of squares with decreasing opacity -->
+  <rect x="52"  y="52"  width="180" height="180" rx="28" fill="#f5f4f1" opacity="0.95"/>
+  <rect x="280" y="52"  width="180" height="180" rx="28" fill="#f5f4f1" opacity="0.55"/>
+  <rect x="52"  y="280" width="180" height="180" rx="28" fill="#f5f4f1" opacity="0.55"/>
+  <rect x="280" y="280" width="180" height="180" rx="28" fill="#f5f4f1" opacity="0.22"/>
+</svg>

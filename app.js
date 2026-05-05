@@ -238,6 +238,8 @@ function initDOM() {
     newPriority:   document.getElementById('new-priority'),
     newCategory:   document.getElementById('new-category'),
     newDate:       document.getElementById('new-date'),
+    newDateWrap:   document.getElementById('new-date-wrap'),
+    newDateText:   document.getElementById('new-date-text'),
     newSyncToggle: document.getElementById('new-sync-toggle'),
     addTaskBtn:    document.getElementById('add-task-btn'),
     addCalLabel:   document.getElementById('add-cal-label'),
@@ -635,6 +637,9 @@ const controller = {
     }
     // Keep category at current filter selection for fast sequential adds
     if (DOM.newCategory && state.categoryFilter === 'all') DOM.newCategory.value = 'Inbox';
+    // Reset date label
+    if (DOM.newDateText) DOM.newDateText.textContent = 'Due date';
+    DOM.newDateWrap?.classList.remove('has-date');
     DOM.newTaskInput.focus();
     render();
 
@@ -865,6 +870,16 @@ function bindEvents() {
   DOM.modalCloseBtn.addEventListener('click',  () => modal.close());
   DOM.modal.addEventListener('click', (e) => {
     if (e.target === DOM.modal) modal.close();
+  });
+
+  // Due-date pill label — update visible text when user picks a date
+  DOM.newDate?.addEventListener('change', () => {
+    if (DOM.newDateText) {
+      DOM.newDateText.textContent = DOM.newDate.value
+        ? utils.formatDate(DOM.newDate.value)
+        : 'Due date';
+    }
+    DOM.newDateWrap?.classList.toggle('has-date', !!DOM.newDate.value);
   });
 
   // Category filter

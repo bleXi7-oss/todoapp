@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Solid background fills edge-to-edge (maskable icons are cropped by Android) -->
+  <rect width="512" height="512" fill="#1a1916"/>
+  <!-- Brand mark scaled to ~60% safe zone (Android crops to circle/squircle) -->
+  <!-- Content fits within the inner 80% safe zone: x/y 102 to 410 -->
+  <rect x="102" y="102" width="138" height="138" rx="22" fill="#f5f4f1" opacity="0.95"/>
+  <rect x="272" y="102" width="138" height="138" rx="22" fill="#f5f4f1" opacity="0.55"/>
+  <rect x="102" y="272" width="138" height="138" rx="22" fill="#f5f4f1" opacity="0.55"/>
+  <rect x="272" y="272" width="138" height="138" rx="22" fill="#f5f4f1" opacity="0.22"/>
+</svg>

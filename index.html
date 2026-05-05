@@ -316,7 +316,15 @@
             <option value="Personal">Personal</option>
             <option value="Family">Family</option>
           </select>
-          <input id="new-date" class="pill-date" type="date" aria-label="Due date" />
+          <label class="pill-date-wrap" id="new-date-wrap">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+              <rect x="0.75" y="1.75" width="9.5" height="8.5" rx="1.5" stroke="currentColor" stroke-width="1.1"/>
+              <path d="M3.5 0.75v2M7.5 0.75v2" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+              <path d="M0.75 4.25h9.5" stroke="currentColor" stroke-width="1.1"/>
+            </svg>
+            <span class="pill-date-text" id="new-date-text">Due date</span>
+            <input id="new-date" class="pill-date" type="date" />
+          </label>
           <div class="add-task-right">
             <!-- Visibility controlled by JS when Google Calendar is connected -->
             <label class="add-cal-label" id="add-cal-label" aria-label="Sync new task to Google Calendar">
