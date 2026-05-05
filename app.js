@@ -19,14 +19,16 @@
    1. STATE
 ═══════════════════════════════════════════════ */
 const state = {
-  todos:     [],
-  filter:    'all',    // 'all' | 'active' | 'completed'
-  sort:      'manual', // 'manual' | 'priority' | 'dueDate' | 'created'
-  editingId: null,
-  dragState: { draggedId: null, overId: null },
+  todos:          [],
+  filter:         'all',    // 'all' | 'active' | 'completed'
+  sort:           'manual', // 'manual' | 'priority' | 'dueDate' | 'created'
+  editingId:      null,
+  categoryFilter: 'all',    // 'all' | category name
+  dragState:      { draggedId: null, overId: null },
 };
 
 const STORAGE_KEY = 'doable_todos_v3';
+const CATEGORIES  = ['Inbox', 'Work', 'Personal', 'Family'];
 
 /* ═══════════════════════════════════════════════
    2. UTILS
@@ -81,11 +83,13 @@ const store = {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       state.todos = raw ? JSON.parse(raw) : [];
-      // Migrate from v2: ensure calendar fields exist
-      state.todos.forEach(t => {
+      // Migrate: ensure all fields exist (safe to run on already-migrated data)
+      state.todos.forEach((t, i) => {
         if (t.calSync     === undefined) t.calSync     = false;
         if (t.calEventId  === undefined) t.calEventId  = null;
         if (t.calSyncedAt === undefined) t.calSyncedAt = null;
+        if (!t.category)                 t.category    = 'Inbox';
+        if (t.order       === undefined) t.order       = i * 1000;
       });
     } catch {
       state.todos = [];
@@ -104,7 +108,8 @@ const store = {
     return state.todos.find(t => t.id === id) ?? null;
   },
 
-  add(text, priority, dueDate, calSync = false) {
+  add(text, priority, dueDate, calSync = false, category = 'Inbox') {
+    const minOrder = state.todos.length ? state.todos[0].order - 1000 : 0;
     const todo = {
       id:          utils.uid(),
       text:        text.trim(),
@@ -112,6 +117,8 @@ const store = {
       priority:    priority || 'medium',
       dueDate:     dueDate || '',
       createdAt:   Date.now(),
+      order:       minOrder,
+      category:    CATEGORIES.includes(category) ? category : 'Inbox',
       calSync,
       calEventId:  null,
       calSyncedAt: null,
@@ -130,7 +137,7 @@ const store = {
   },
 
   // Returns { todo, prev } so the caller can decide which GCal action to take.
-  update(id, { text, priority, dueDate, calSync }) {
+  update(id, { text, priority, dueDate, calSync, category }) {
     const todo = store.find(id);
     if (!todo) return null;
     const prev = structuredClone(todo);
@@ -138,6 +145,7 @@ const store = {
     if (priority !== undefined) todo.priority = priority;
     if (dueDate  !== undefined) todo.dueDate  = dueDate;
     if (calSync  !== undefined) todo.calSync  = calSync;
+    if (category !== undefined) todo.category = CATEGORIES.includes(category) ? category : 'Inbox';
     store.save();
     return { todo, prev };
   },
@@ -166,6 +174,8 @@ const store = {
     if (from === -1 || to === -1) return;
     const [item] = state.todos.splice(from, 1);
     state.todos.splice(to, 0, item);
+    // Keep order field in sync with array position so it persists correctly
+    state.todos.forEach((t, i) => { t.order = (i + 1) * 1000; });
     store.save();
   },
 
@@ -181,9 +191,12 @@ const store = {
 
   getVisible() {
     let list = state.todos.filter(t => {
-      if (state.filter === 'active')    return !t.completed;
-      if (state.filter === 'completed') return  t.completed;
-      return true;
+      const passStatus =
+        state.filter === 'active'    ? !t.completed :
+        state.filter === 'completed' ?  t.completed : true;
+      const passCat =
+        state.categoryFilter === 'all' || t.category === state.categoryFilter;
+      return passStatus && passCat;
     });
     if (state.sort === 'priority') {
       list = [...list].sort((a, b) =>
@@ -223,6 +236,7 @@ function initDOM() {
     // Add form
     newTaskInput:  document.getElementById('new-task-input'),
     newPriority:   document.getElementById('new-priority'),
+    newCategory:   document.getElementById('new-category'),
     newDate:       document.getElementById('new-date'),
     newSyncToggle: document.getElementById('new-sync-toggle'),
     addTaskBtn:    document.getElementById('add-task-btn'),
@@ -233,11 +247,18 @@ function initDOM() {
     sortSelect:        document.getElementById('sort-select'),
     clearCompletedBtn: document.getElementById('clear-completed-btn'),
     gcalSyncAllBtn:    document.getElementById('gcal-sync-all-btn'),
+    categoryNav:       document.getElementById('category-nav'),
+
+    // Export / Import
+    exportBtn:       document.getElementById('export-btn'),
+    importBtn:       document.getElementById('import-btn'),
+    importFileInput: document.getElementById('import-file-input'),
 
     // Edit modal
     modal:           document.getElementById('edit-modal'),
     modalText:       document.getElementById('modal-text'),
     modalPriority:   document.getElementById('modal-priority'),
+    modalCategory:   document.getElementById('modal-category'),
     modalDate:       document.getElementById('modal-date'),
     modalSyncToggle: document.getElementById('modal-sync-toggle'),
     modalSaveBtn:    document.getElementById('modal-save-btn'),
@@ -300,9 +321,18 @@ const ui = {
     // Empty state — messages come from data-* attributes set in HTML
     DOM.emptyState.hidden = visible.length > 0;
     if (visible.length === 0) {
-      const key = state.filter[0].toUpperCase() + state.filter.slice(1);
-      DOM.emptyState.querySelector('.empty-title').textContent = DOM.emptyState.dataset['msg' + key];
-      DOM.emptyState.querySelector('.empty-sub').textContent   = DOM.emptyState.dataset['sub' + key];
+      if (state.categoryFilter !== 'all') {
+        const cat = state.categoryFilter;
+        DOM.emptyState.querySelector('.empty-title').textContent = `No tasks in ${cat}`;
+        DOM.emptyState.querySelector('.empty-sub').textContent   =
+          state.filter === 'active'    ? `Active ${cat} tasks will appear here.` :
+          state.filter === 'completed' ? `Completed ${cat} tasks will appear here.` :
+          `Add a task and assign it to ${cat}.`;
+      } else {
+        const key = state.filter[0].toUpperCase() + state.filter.slice(1);
+        DOM.emptyState.querySelector('.empty-title').textContent = DOM.emptyState.dataset['msg' + key];
+        DOM.emptyState.querySelector('.empty-sub').textContent   = DOM.emptyState.dataset['sub' + key];
+      }
     }
 
     // Task list — one DOM write via DocumentFragment
@@ -347,6 +377,7 @@ const ui = {
           ${ui.buildPriorityBadge(todo.priority)}
           ${ui.buildDateMeta(todo.dueDate, isOverdue)}
           ${ui.buildCalBadge(todo)}
+          ${ui.buildCategoryBadge(todo)}
         </div>
       </div>
 
@@ -418,6 +449,12 @@ const ui = {
       </svg>
       Syncing…
     </span>`;
+  },
+
+  buildCategoryBadge(todo) {
+    // Inbox is the default — only badge non-default categories to avoid visual noise
+    if (!todo.category || todo.category === 'Inbox') return '';
+    return `<span class="meta-badge badge--category">${utils.escapeHTML(todo.category)}</span>`;
   },
 
   buildSyncBtn(todo) {
@@ -506,6 +543,10 @@ const dnd = {
     e.currentTarget.classList.remove('drag-over');
     const { draggedId, overId } = state.dragState;
     if (!draggedId || !overId || draggedId === overId) return;
+    if (state.sort !== 'manual') {
+      window.googleCalendar?.toast.show('Switch to Manual order to drag-reorder tasks.', 'info');
+      return;
+    }
     controller.reorder(draggedId, overId);
   },
 };
@@ -524,6 +565,7 @@ const modal = {
     DOM.modalPriority.value     = todo.priority;
     DOM.modalDate.value         = todo.dueDate || '';
     DOM.modalSyncToggle.checked = !!todo.calSync;
+    if (DOM.modalCategory) DOM.modalCategory.value = todo.category || 'Inbox';
 
     DOM.modal.hidden = false;
     document.body.style.overflow = 'hidden';
@@ -543,6 +585,7 @@ const modal = {
       priority: DOM.modalPriority.value,
       dueDate:  DOM.modalDate.value,
       calSync:  DOM.modalSyncToggle.checked,
+      category: DOM.modalCategory?.value || 'Inbox',
     };
   },
 };
@@ -578,8 +621,9 @@ const controller = {
     const text = DOM.newTaskInput.value.trim();
     if (!text) { DOM.newTaskInput.focus(); return; }
 
-    const calSync = DOM.newSyncToggle?.checked ?? false;
-    const todo = store.add(text, DOM.newPriority.value, DOM.newDate.value, calSync);
+    const calSync  = DOM.newSyncToggle?.checked ?? false;
+    const category = DOM.newCategory?.value || 'Inbox';
+    const todo = store.add(text, DOM.newPriority.value, DOM.newDate.value, calSync, category);
 
     // Reset add form
     DOM.newTaskInput.value = '';
@@ -589,6 +633,8 @@ const controller = {
       DOM.newSyncToggle.checked = false;
       DOM.addCalLabel?.classList.remove('is-checked');
     }
+    // Keep category at current filter selection for fast sequential adds
+    if (DOM.newCategory && state.categoryFilter === 'all') DOM.newCategory.value = 'Inbox';
     DOM.newTaskInput.focus();
     render();
 
@@ -699,6 +745,81 @@ const controller = {
     const onUpdated = (todo) => { store.updateCalFields(todo); render(); };
     window.googleCalendar?.syncAllTodos(state.todos, onUpdated);
   },
+
+  // ── Phase 2: Category filter ──────────────────
+  setCategoryFilter(cat) {
+    state.categoryFilter = cat;
+    DOM.categoryNav?.querySelectorAll('.cat-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.cat === cat);
+    });
+    // Auto-set add form category to match filter for fast sequential adds
+    if (DOM.newCategory && cat !== 'all') DOM.newCategory.value = cat;
+    render();
+  },
+
+  // ── Phase 1: Export ───────────────────────────
+  exportData() {
+    const payload = {
+      app:        'Doable',
+      version:    1,
+      exportedAt: new Date().toISOString(),
+      todos:      state.todos,
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `doable-backup-${utils.todayISO()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    window.googleCalendar?.toast.show('Backup exported.', 'success');
+  },
+
+  // ── Phase 1: Import ───────────────────────────
+  importData() {
+    DOM.importFileInput?.click();
+  },
+
+  handleImportFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+        if (data.app !== 'Doable' || !Array.isArray(data.todos)) throw new Error('bad format');
+        const count   = data.todos.length;
+        const current = state.todos.length;
+        if (!confirm(
+          `Import ${count} task${count !== 1 ? 's' : ''}?\n` +
+          `This will replace your current ${current} task${current !== 1 ? 's' : ''}.`
+        )) return;
+
+        // Ensure all fields exist on imported items
+        data.todos.forEach((t, i) => {
+          if (!t.id)                       t.id          = utils.uid();
+          if (!t.category)                 t.category    = 'Inbox';
+          if (t.order       === undefined) t.order       = i * 1000;
+          if (t.calSync     === undefined) t.calSync     = false;
+          if (t.calEventId  === undefined) t.calEventId  = null;
+          if (t.calSyncedAt === undefined) t.calSyncedAt = null;
+        });
+
+        state.todos = data.todos;
+        store.save();
+        render();
+        window.googleCalendar?.toast.show(
+          `Imported ${count} task${count !== 1 ? 's' : ''}.`, 'success'
+        );
+      } catch {
+        window.googleCalendar?.toast.show('Invalid backup file — import failed.', 'error');
+      }
+    };
+    reader.readAsText(file);
+    DOM.importFileInput.value = ''; // allow re-importing the same file
+  },
 };
 
 /* ═══════════════════════════════════════════════
@@ -746,6 +867,19 @@ function bindEvents() {
     if (e.target === DOM.modal) modal.close();
   });
 
+  // Category filter
+  DOM.categoryNav?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.cat-btn[data-cat]');
+    if (btn) controller.setCategoryFilter(btn.dataset.cat);
+  });
+
+  // Export / Import
+  DOM.exportBtn?.addEventListener('click', () => controller.exportData());
+  DOM.importBtn?.addEventListener('click', () => controller.importData());
+  DOM.importFileInput?.addEventListener('change', (e) => {
+    if (e.target.files[0]) controller.handleImportFile(e.target.files[0]);
+  });
+
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -767,6 +901,12 @@ function init() {
   bindEvents();
   window.googleCalendar?.init();
   render();
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

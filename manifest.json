@@ -1,0 +1,18 @@
+{
+  "name": "Doable",
+  "short_name": "Doable",
+  "description": "A clean to-do app with priority levels, due dates, and Google Calendar sync.",
+  "start_url": "/todoapp/",
+  "scope": "/todoapp/",
+  "display": "standalone",
+  "background_color": "#f5f4f1",
+  "theme_color": "#1a1916",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

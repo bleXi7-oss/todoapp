@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Doable — Things worth doing</title>
 
-  <!-- Favicon -->
+  <!-- Favicon & PWA -->
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="manifest.json" />
 
   <!-- SEO & browser chrome -->
   <meta name="description" content="Doable — a clean, fast to-do app with priority levels, due dates, and optional Google Calendar sync." />
@@ -114,6 +115,16 @@
             <input id="modal-date" class="form-input" type="date" />
           </div>
         </div>
+        <div class="form-group">
+          <label class="form-label" for="modal-category">Category</label>
+          <select id="modal-category" class="form-select">
+            <option value="Inbox">Inbox</option>
+            <option value="Work">Work</option>
+            <option value="Personal">Personal</option>
+            <option value="Family">Family</option>
+          </select>
+        </div>
+
         <!-- Visibility controlled by JS based on Google Calendar auth state -->
         <div class="modal-sync-row" id="modal-sync-row">
           <div class="sync-row-left">
@@ -227,6 +238,20 @@
 
       <hr class="sidebar-divider" aria-hidden="true" />
 
+      <!-- Category / Project filter -->
+      <div class="cat-section">
+        <p class="legend-label">Project</p>
+        <div class="cat-list" id="category-nav">
+          <button class="cat-btn active" data-cat="all">All projects</button>
+          <button class="cat-btn" data-cat="Inbox">Inbox</button>
+          <button class="cat-btn" data-cat="Work">Work</button>
+          <button class="cat-btn" data-cat="Personal">Personal</button>
+          <button class="cat-btn" data-cat="Family">Family</button>
+        </div>
+      </div>
+
+      <hr class="sidebar-divider" aria-hidden="true" />
+
       <div class="priority-legend">
         <p class="legend-label">Priority</p>
         <ul class="legend-list">
@@ -241,6 +266,16 @@
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 4h10M5 4V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V4M10 4l-.7 7.5a.5.5 0 01-.5.5H5.2a.5.5 0 01-.5-.5L4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Clear completed
         </button>
+        <div class="data-actions">
+          <button class="btn-sidebar-action" id="export-btn" title="Export tasks to JSON backup">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true"><path d="M5.5 1v6M2 7.5l3.5 2.5 3.5-2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 10h9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Export
+          </button>
+          <button class="btn-sidebar-action" id="import-btn" title="Import tasks from JSON backup">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true"><path d="M5.5 7V1M2 3.5L5.5 1 9 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 10h9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Import
+          </button>
+        </div>
       </div>
     </aside>
 
@@ -274,6 +309,12 @@
             <option value="low">🟢 Low</option>
             <option value="medium" selected>🟠 Medium</option>
             <option value="high">🔴 High</option>
+          </select>
+          <select id="new-category" class="pill-select" aria-label="Category">
+            <option value="Inbox">Inbox</option>
+            <option value="Work">Work</option>
+            <option value="Personal">Personal</option>
+            <option value="Family">Family</option>
           </select>
           <input id="new-date" class="pill-date" type="date" aria-label="Due date" />
           <div class="add-task-right">
@@ -315,6 +356,9 @@
       </div>
     </main>
   </div>
+
+  <!-- Hidden file input for JSON import (triggered programmatically) -->
+  <input type="file" id="import-file-input" accept=".json" style="display:none" aria-hidden="true" />
 
   <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
