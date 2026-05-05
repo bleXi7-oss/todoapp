@@ -55,7 +55,12 @@ const tokenStore = {
   },
   set(tokenObj) {
     // tokenObj: { access_token, expires_at }
-    localStorage.setItem(GCAL_STORAGE_KEY, JSON.stringify(tokenObj));
+    try {
+      localStorage.setItem(GCAL_STORAGE_KEY, JSON.stringify(tokenObj));
+    } catch (e) {
+      // Storage quota exceeded — token is valid this session but won't persist
+      console.warn('[GCal] Could not persist token:', e);
+    }
   },
   clear() {
     localStorage.removeItem(GCAL_STORAGE_KEY);
@@ -115,19 +120,37 @@ function initTokenClient(clientId) {
 /**
  * Silently request a new access token.
  * Returns the same Promise to all concurrent callers so only one refresh runs at a time.
+ *
+ * Safety notes:
+ *  - Captures a local `client` ref so signOut() setting _tokenClient=null mid-refresh
+ *    doesn't cause a TypeError when the callback tries to restore the original callback.
+ *  - Checks _tokenClient===null inside the callback to detect a sign-out that raced the
+ *    refresh; rejects instead of storing a stale token.
+ *  - Wraps requestAccessToken() in try/catch so a synchronous throw also restores the
+ *    original callback and rejects the promise cleanly.
  */
 function silentRefresh() {
   if (_refreshPromise) return _refreshPromise;
   if (!_tokenClient)   return Promise.reject(new Error('NOT_AUTHENTICATED'));
+  const client = _tokenClient; // local ref — unaffected by signOut clearing the global
   _refreshPromise = new Promise((resolve, reject) => {
-    const origCallback = _tokenClient.callback;
-    _tokenClient.callback = (resp) => {
-      _tokenClient.callback = origCallback;
+    const origCallback = client.callback;
+    client.callback = (resp) => {
+      client.callback = origCallback;
+      if (_tokenClient === null) { // signOut() ran while refresh was in flight
+        reject(new Error('NOT_AUTHENTICATED'));
+        return;
+      }
       if (resp.error) { reject(new Error(resp.error)); return; }
       tokenStore.set(parseTokenResponse(resp));
       resolve();
     };
-    _tokenClient.requestAccessToken({ prompt: '' });
+    try {
+      client.requestAccessToken({ prompt: '' });
+    } catch (err) {
+      client.callback = origCallback; // restore before rejecting
+      reject(err);
+    }
   }).finally(() => { _refreshPromise = null; });
   return _refreshPromise;
 }
@@ -140,8 +163,7 @@ async function handleTokenResponse(resp) {
     handleTokenError(resp);
     return;
   }
-  const expiresAt = Date.now() + (parseInt(resp.expires_in, 10) * 1000);
-  tokenStore.set({ access_token: resp.access_token, expires_at: expiresAt });
+  tokenStore.set(parseTokenResponse(resp));
 
   gcalLog.add('info', 'OAuth token received. Fetching user profile…');
 
@@ -204,7 +226,8 @@ async function signOut() {
   }
   tokenStore.clear();
   userStore.clear();
-  _tokenClient = null;
+  _tokenClient    = null;
+  _refreshPromise = null; // abandon any in-flight silent refresh so it can't restore the token
   gcalUI.updateWidget();
   gcalLog.add('info', 'Disconnected from Google Calendar.');
   gcalToast.show('Disconnected from Google Calendar.', 'info');
@@ -216,50 +239,40 @@ async function signOut() {
 
 /**
  * Authenticated fetch wrapper for Google APIs.
+ * Silently refreshes an expired token before the request.
+ * Fires 'gcal:auth-expired' on 401 so the UI layer can react without being
+ * called directly from here (keeps the API layer decoupled from the DOM).
  */
 async function gcalFetch(url, options = {}) {
-  // Auto-refresh check — if token expired, request a new one silently
   if (!tokenStore.isValid() && url !== GCAL_PEOPLE_API) {
-    const clientId = clientIdStore.get();
-    if (clientId && _tokenClient) {
-      await new Promise((resolve, reject) => {
-        const orig = _tokenClient.callback;
-        _tokenClient.callback = (resp) => {
-          _tokenClient.callback = orig;
-          if (resp.error) { reject(new Error(resp.error)); return; }
-          const expiresAt = Date.now() + (parseInt(resp.expires_in, 10) * 1000);
-          tokenStore.set({ access_token: resp.access_token, expires_at: expiresAt });
-          resolve();
-        };
-        _tokenClient.requestAccessToken({ prompt: '' });
-      });
-    } else {
-      throw new Error('NOT_AUTHENTICATED');
-    }
+    if (!_tokenClient) throw new Error('NOT_AUTHENTICATED');
+    await silentRefresh(); // shared promise — concurrent calls piggyback the same refresh
   }
 
   const token = tokenStore.getAccessToken();
   if (!token) throw new Error('NOT_AUTHENTICATED');
 
-  const headers = {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
-  };
-
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type':  'application/json',
+      ...(options.headers ?? {}),
+    },
+  });
 
   if (res.status === 401) {
-    // Token was revoked externally
     tokenStore.clear();
-    gcalUI.updateWidget();
+    window.dispatchEvent(new CustomEvent('gcal:auth-expired'));
     throw new Error('TOKEN_EXPIRED');
   }
+  if (res.status === 404) throw new Error('NOT_FOUND');
+  if (res.status === 429) throw new Error('RATE_LIMITED');
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody?.error?.message || `HTTP ${res.status}`);
   }
-  if (res.status === 204) return null; // DELETE responses
+  if (res.status === 204) return null;
   return res.json();
 }
 
@@ -308,16 +321,20 @@ async function createCalendarEvent(todo) {
 
 /**
  * Update an existing Calendar event.
+ * Falls back to creating a new event if the stored calEventId no longer exists
+ * (e.g. the user deleted it directly from Google Calendar).
  */
 async function updateCalendarEvent(todo) {
   if (!todo.calEventId) return createCalendarEvent(todo);
   const url  = `${GCAL_API_BASE}/calendars/${encodeURIComponent(GCAL_CALENDAR_ID)}/events/${encodeURIComponent(todo.calEventId)}`;
   const body = buildEventBody(todo);
-  await gcalFetch(url, {
-    method: 'PATCH',
-    body:   JSON.stringify(body),
-  });
-  return todo.calEventId;
+  try {
+    await gcalFetch(url, { method: 'PATCH', body: JSON.stringify(body) });
+    return todo.calEventId;
+  } catch (err) {
+    if (err.message === 'NOT_FOUND') return createCalendarEvent(todo);
+    throw err;
+  }
 }
 
 /**
@@ -356,11 +373,7 @@ async function syncTodo(todo, { silent = false } = {}) {
     }
     return { success: true, eventId };
   } catch (err) {
-    const msg = err.message === 'TOKEN_EXPIRED'
-      ? 'Session expired. Please reconnect Google Calendar.'
-      : err.message === 'NOT_AUTHENTICATED'
-        ? 'Not connected to Google Calendar.'
-        : `Sync failed: ${err.message}`;
+    const msg = userMessage(err);
     if (!silent) { gcalLog.add('error', `"${truncate(todo.text)}" — ${msg}`); gcalToast.show(msg, 'error'); }
     return { success: false, error: err.message };
   }
@@ -368,28 +381,38 @@ async function syncTodo(todo, { silent = false } = {}) {
 
 /**
  * Remove a todo from Google Calendar when deleted.
+ * Returns { success, error } for consistency with syncTodo.
  */
 async function unsyncTodo(eventId, taskText) {
-  if (!eventId) return;
-  if (!navigator.onLine) { gcalLog.add('error', 'Offline — calendar event not removed.'); return; }
-  if (!tokenStore.isValid()) return;
+  if (!eventId)            return { success: false, error: 'no_event_id' };
+  if (!navigator.onLine)  {
+    gcalLog.add('error', 'Offline — calendar event not removed.');
+    return { success: false, error: 'offline' };
+  }
+  if (!tokenStore.isValid()) return { success: false, error: 'not_authenticated' };
   try {
     await deleteCalendarEvent(eventId);
     gcalLog.add('success', `Removed "${truncate(taskText)}" from Calendar.`);
+    return { success: true };
   } catch (err) {
     gcalLog.add('error', `Could not remove event: ${err.message}`);
+    return { success: false, error: err.message };
   }
 }
 
-/* ═══════════════════════════════════════════════
-   6. SYNC-ALL
-═══════════════════════════════════════════════ */
+// Prevents two sync-all runs from overlapping (button disable alone isn't enough —
+// the button state updates asynchronously and the call can also come programmatically).
+let _syncAllRunning = false;
 
 /**
  * Sync every todo that has calSync = true.
  * Shows progress in the log panel.
  */
 async function syncAllTodos(todos, onTodoUpdated) {
+  if (_syncAllRunning) {
+    gcalToast.show('Sync already in progress.', 'info');
+    return;
+  }
   if (!navigator.onLine) {
     gcalToast.show('No internet connection.', 'error');
     gcalLog.add('error', 'Sync-all failed: no internet.');
@@ -407,123 +430,141 @@ async function syncAllTodos(todos, onTodoUpdated) {
     return;
   }
 
+  _syncAllRunning = true;
   gcalLog.add('info', `Starting sync for ${targets.length} task${targets.length > 1 ? 's' : ''}…`);
   gcalUI.setSyncAllLoading(true);
 
   let successCount = 0;
   let failCount    = 0;
+  let aborted      = false;
 
-  for (const todo of targets) {
-    const result = await syncTodo(todo, { silent: true });
-    if (result.success) {
-      todo.calEventId  = result.eventId;
-      todo.calSyncedAt = Date.now();
-      onTodoUpdated(todo);
-      gcalLog.add('success', `✓ "${truncate(todo.text)}"`);
-      successCount++;
-    } else {
-      gcalLog.add('error', `✗ "${truncate(todo.text)}" — ${result.error}`);
-      failCount++;
+  try {
+    for (const todo of targets) {
+      const result = await syncTodo(todo, { silent: true });
+      if (result.success) {
+        todo.calEventId  = result.eventId;
+        todo.calSyncedAt = Date.now();
+        onTodoUpdated(todo);
+        gcalLog.add('success', `✓ "${truncate(todo.text)}"`);
+        successCount++;
+      } else {
+        gcalLog.add('error', `✗ "${truncate(todo.text)}" — ${result.error}`);
+        failCount++;
+        // Auth failures affect every remaining task — abort rather than logging N identical errors
+        if (result.error === 'not_authenticated' || result.error === 'TOKEN_EXPIRED') {
+          gcalLog.add('error', 'Sync aborted: authentication lost.');
+          aborted = true;
+          break;
+        }
+      }
+      // Small delay to avoid rate-limiting
+      await sleep(120);
     }
-    // Small delay to avoid rate-limiting
-    await sleep(120);
+  } finally {
+    // Always reset loading state, even if an unexpected error escapes the loop
+    _syncAllRunning = false;
+    gcalUI.setSyncAllLoading(false);
   }
 
-  gcalUI.setSyncAllLoading(false);
-  gcalLog.add('info', `Sync complete: ${successCount} succeeded, ${failCount} failed.`);
-  gcalToast.show(
-    failCount === 0
-      ? `Synced ${successCount} task${successCount > 1 ? 's' : ''} to Calendar.`
-      : `${successCount} synced, ${failCount} failed.`,
-    failCount === 0 ? 'success' : 'error'
-  );
+  const suffix = aborted ? ' (aborted)' : '';
+  gcalLog.add('info', `Sync complete: ${successCount} succeeded, ${failCount} failed${suffix}.`);
 
-  // Show log if there were failures
-  if (failCount > 0) gcalUI.openLog();
+  if (aborted) {
+    gcalToast.show('Session expired during sync. Please reconnect.', 'error');
+  } else {
+    gcalToast.show(
+      failCount === 0
+        ? `Synced ${successCount} task${successCount > 1 ? 's' : ''} to Calendar.`
+        : `${successCount} synced, ${failCount} failed.`,
+      failCount === 0 ? 'success' : 'error'
+    );
+  }
+
+  if (failCount > 0 || aborted) gcalUI.openLog();
 }
 
 /* ═══════════════════════════════════════════════
-   7. UI STATE MANAGEMENT
+   6. DOM CACHE — populated once in init()
+   Avoids getElementById on every call to hot paths
+   like updateWidget (called on every auth state change).
+═══════════════════════════════════════════════ */
+const gcalDOM = {};
+
+function cacheDOM() {
+  gcalDOM.loggedOut      = document.getElementById('gcal-loggedout');
+  gcalDOM.loggedIn       = document.getElementById('gcal-loggedin');
+  gcalDOM.userName       = document.getElementById('gcal-user-name');
+  gcalDOM.avatar         = document.getElementById('gcal-avatar');
+  gcalDOM.addCalLabel    = document.getElementById('add-cal-label');
+  gcalDOM.modalSyncRow   = document.getElementById('modal-sync-row');
+  gcalDOM.syncAllBtn     = document.getElementById('gcal-sync-all-btn');
+  gcalDOM.setupModal     = document.getElementById('setup-modal');
+  gcalDOM.setupInput     = document.getElementById('setup-client-id');
+  gcalDOM.setupOrigin    = document.getElementById('setup-origin-hint');
+  gcalDOM.setupSave      = document.getElementById('setup-modal-save');
+  gcalDOM.setupCancel    = document.getElementById('setup-modal-cancel');
+  gcalDOM.setupClose     = document.getElementById('setup-modal-close');
+  gcalDOM.connectBtn     = document.getElementById('gcal-connect-btn');
+  gcalDOM.disconnectBtn  = document.getElementById('gcal-disconnect-btn');
+  gcalDOM.logBtn         = document.getElementById('gcal-log-btn');
+  gcalDOM.logPanel       = document.getElementById('sync-log-panel');
+  gcalDOM.logClose       = document.getElementById('sync-log-close');
+  gcalDOM.logClear       = document.getElementById('sync-log-clear');
+  gcalDOM.logList        = document.getElementById('sync-log-list');
+  gcalDOM.toastContainer = document.getElementById('toast-container');
+  gcalDOM.newSyncToggle  = document.getElementById('new-sync-toggle');
+}
+
+/* ═══════════════════════════════════════════════
+   7. UI WIDGET
 ═══════════════════════════════════════════════ */
 const gcalUI = {
   updateWidget() {
-    const loggedOut = document.getElementById('gcal-loggedout');
-    const loggedIn  = document.getElementById('gcal-loggedin');
-    if (!loggedOut || !loggedIn) return;
+    if (!gcalDOM.loggedOut || !gcalDOM.loggedIn) return;
 
     const isAuth = tokenStore.isValid();
-    loggedOut.hidden = isAuth;
-    loggedIn.hidden  = !isAuth;
+    gcalDOM.loggedOut.hidden = isAuth;
+    gcalDOM.loggedIn.hidden  = !isAuth;
 
     if (isAuth) {
       const user = userStore.get();
-      const nameEl   = document.getElementById('gcal-user-name');
-      const avatarEl = document.getElementById('gcal-avatar');
-      if (nameEl && user) {
-        nameEl.textContent = user.name || user.email || 'Google Account';
+      if (gcalDOM.userName && user) {
+        gcalDOM.userName.textContent = user.name || user.email || 'Google Account';
       }
-      if (avatarEl && user) {
-        if (user.picture) {
-          avatarEl.innerHTML = `<img src="${user.picture}" alt="${user.name}" />`;
-        } else {
-          avatarEl.textContent = (user.name || 'G')[0].toUpperCase();
-        }
+      if (gcalDOM.avatar && user) {
+        gcalDOM.avatar.innerHTML = user.picture
+          ? `<img src="${user.picture}" alt="${user.name}" />`
+          : (user.name || 'G')[0].toUpperCase();
       }
     }
 
-    // Show/hide the cal toggle in add form based on auth state
-    const addCalLabel = document.getElementById('add-cal-label');
-    if (addCalLabel) {
-      addCalLabel.style.display = isAuth ? '' : 'none';
-    }
-    // Show/hide modal sync row
-    const modalSyncRow = document.getElementById('modal-sync-row');
-    if (modalSyncRow) {
-      modalSyncRow.style.display = isAuth ? '' : 'none';
-    }
+    if (gcalDOM.addCalLabel)  gcalDOM.addCalLabel.style.display  = isAuth ? '' : 'none';
+    if (gcalDOM.modalSyncRow) gcalDOM.modalSyncRow.style.display = isAuth ? '' : 'none';
   },
 
   setSyncAllLoading(isLoading) {
-    const btn = document.getElementById('gcal-sync-all-btn');
-    if (!btn) return;
-    btn.classList.toggle('is-syncing', isLoading);
-    btn.disabled = isLoading;
+    if (!gcalDOM.syncAllBtn) return;
+    gcalDOM.syncAllBtn.classList.toggle('is-syncing', isLoading);
+    gcalDOM.syncAllBtn.disabled = isLoading;
   },
 
   openSetupModal() {
-    const modal = document.getElementById('setup-modal');
-    if (!modal) return;
-    // Pre-fill existing client id
-    const input = document.getElementById('setup-client-id');
-    if (input) input.value = clientIdStore.get();
-    // Show current origin
-    const originHint = document.getElementById('setup-origin-hint');
-    if (originHint) originHint.textContent = window.location.origin;
-    modal.hidden = false;
+    if (!gcalDOM.setupModal) return;
+    if (gcalDOM.setupInput)  gcalDOM.setupInput.value = clientIdStore.get();
+    if (gcalDOM.setupOrigin) gcalDOM.setupOrigin.textContent = window.location.origin;
+    gcalDOM.setupModal.hidden = false;
     document.body.style.overflow = 'hidden';
-    setTimeout(() => input?.focus(), 50);
+    setTimeout(() => gcalDOM.setupInput?.focus(), 50);
   },
 
   closeSetupModal() {
-    const modal = document.getElementById('setup-modal');
-    if (modal) modal.hidden = true;
+    if (gcalDOM.setupModal) gcalDOM.setupModal.hidden = true;
     document.body.style.overflow = '';
   },
 
-  openLog() {
-    const panel = document.getElementById('sync-log-panel');
-    if (panel) panel.hidden = false;
-  },
-
-  closeLog() {
-    const panel = document.getElementById('sync-log-panel');
-    if (panel) panel.hidden = true;
-  },
-
-  toggleLog() {
-    const panel = document.getElementById('sync-log-panel');
-    if (panel) panel.hidden = !panel.hidden;
-  },
+  openLog()   { if (gcalDOM.logPanel) gcalDOM.logPanel.hidden = false; },
+  closeLog()  { if (gcalDOM.logPanel) gcalDOM.logPanel.hidden = true; },
+  toggleLog() { if (gcalDOM.logPanel) gcalDOM.logPanel.hidden = !gcalDOM.logPanel.hidden; },
 };
 
 /* ═══════════════════════════════════════════════
@@ -531,7 +572,7 @@ const gcalUI = {
 ═══════════════════════════════════════════════ */
 const gcalToast = {
   show(message, type = 'success') {
-    const container = document.getElementById('toast-container');
+    const container = gcalDOM.toastContainer;
     if (!container) return;
 
     const icons = {
@@ -554,13 +595,11 @@ const gcalToast = {
 
 const gcalLog = {
   add(type, message) {
-    const list = document.getElementById('sync-log-list');
+    const list = gcalDOM.logList;
     if (!list) return;
 
-    const now  = new Date();
-    const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    const li = document.createElement('li');
+    const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const li   = document.createElement('li');
     li.className = 'sync-log-item';
     li.innerHTML = `
       <span class="sync-log-dot sync-log-dot--${type}" aria-hidden="true"></span>
@@ -573,13 +612,12 @@ const gcalLog = {
     while (list.children.length > 50) list.removeChild(list.lastChild);
   },
   clear() {
-    const list = document.getElementById('sync-log-list');
-    if (list) list.innerHTML = '';
+    if (gcalDOM.logList) gcalDOM.logList.innerHTML = '';
   },
 };
 
 /* ═══════════════════════════════════════════════
-   UTILS (local)
+   9. LOCAL UTILS
 ═══════════════════════════════════════════════ */
 function truncate(str, max = 36) {
   return str.length > max ? str.slice(0, max) + '…' : str;
@@ -592,8 +630,25 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Converts a raw GIS token response into the shape tokenStore expects.
+function parseTokenResponse(resp) {
+  return {
+    access_token: resp.access_token,
+    expires_at:   Date.now() + (parseInt(resp.expires_in, 10) * 1000),
+  };
+}
+
+// Maps internal error codes to user-facing strings (single source of truth).
+function userMessage(err) {
+  if (err.message === 'TOKEN_EXPIRED')     return 'Session expired. Please reconnect Google Calendar.';
+  if (err.message === 'NOT_AUTHENTICATED') return 'Not connected to Google Calendar.';
+  if (err.message === 'NOT_FOUND')         return 'Calendar event not found — it may have been deleted externally.';
+  if (err.message === 'RATE_LIMITED')      return 'Google Calendar rate limit reached. Please wait a moment.';
+  return `Sync failed: ${err.message}`;
+}
+
 /* ═══════════════════════════════════════════════
-   9. PUBLIC API
+  10. PUBLIC API + INIT
    (consumed by app.js)
 ═══════════════════════════════════════════════ */
 const googleCalendar = {
@@ -629,15 +684,24 @@ const googleCalendar = {
 
   /* Bootstrap: call once after DOM ready */
   init() {
+    cacheDOM();
+
+    // gcalFetch fires this when a token is revoked server-side (401).
+    // Handled here (UI layer) so the fetch layer stays decoupled from the DOM.
+    window.addEventListener('gcal:auth-expired', () => gcalUI.updateWidget());
+
     const clientId = clientIdStore.get();
     if (clientId) {
-      // GIS might still be loading — wait for it
+      // GIS might still be loading — poll, but give up after ~10 s
+      let gisAttempts = 0;
       const tryInit = () => {
         if (window.google?.accounts?.oauth2) {
           initTokenClient(clientId);
           gcalUI.updateWidget();
-        } else {
+        } else if (++gisAttempts < 33) {
           setTimeout(tryInit, 300);
+        } else {
+          gcalLog.add('error', 'Google Identity Services failed to load. Check your internet connection.');
         }
       };
       tryInit();
@@ -645,11 +709,10 @@ const googleCalendar = {
       gcalUI.updateWidget();
     }
 
-    // Bind setup modal events
-    document.getElementById('setup-modal-save')?.addEventListener('click', () => {
-      const input = document.getElementById('setup-client-id');
-      const id    = input?.value?.trim();
-      if (!id) { input?.focus(); return; }
+    // Setup modal
+    gcalDOM.setupSave?.addEventListener('click', () => {
+      const id = gcalDOM.setupInput?.value?.trim();
+      if (!id) { gcalDOM.setupInput?.focus(); return; }
       if (!id.endsWith('.apps.googleusercontent.com')) {
         gcalToast.show('That doesn\'t look like a valid Client ID.', 'error');
         return;
@@ -659,29 +722,27 @@ const googleCalendar = {
       gcalLog.add('info', 'Client ID saved. Initiating sign-in…');
       signIn();
     });
-    document.getElementById('setup-modal-cancel')?.addEventListener('click', gcalUI.closeSetupModal);
-    document.getElementById('setup-modal-close')?.addEventListener('click',  gcalUI.closeSetupModal);
-    document.getElementById('setup-modal')?.addEventListener('click', (e) => {
-      if (e.target === document.getElementById('setup-modal')) gcalUI.closeSetupModal();
+    gcalDOM.setupCancel?.addEventListener('click', () => gcalUI.closeSetupModal());
+    gcalDOM.setupClose?.addEventListener('click',  () => gcalUI.closeSetupModal());
+    gcalDOM.setupModal?.addEventListener('click', (e) => {
+      if (e.target === gcalDOM.setupModal) gcalUI.closeSetupModal();
     });
 
-    // Sidebar buttons
-    document.getElementById('gcal-connect-btn')?.addEventListener('click', signIn);
-    document.getElementById('gcal-disconnect-btn')?.addEventListener('click', signOut);
-    document.getElementById('gcal-log-btn')?.addEventListener('click', gcalUI.toggleLog.bind(gcalUI));
+    // Sidebar
+    gcalDOM.connectBtn?.addEventListener('click',    signIn);
+    gcalDOM.disconnectBtn?.addEventListener('click', signOut);
+    gcalDOM.logBtn?.addEventListener('click',        () => gcalUI.toggleLog());
 
-    // Sync log panel
-    document.getElementById('sync-log-close')?.addEventListener('click', gcalUI.closeLog.bind(gcalUI));
-    document.getElementById('sync-log-clear')?.addEventListener('click', gcalLog.clear.bind(gcalLog));
+    // Log panel
+    gcalDOM.logClose?.addEventListener('click', () => gcalUI.closeLog());
+    gcalDOM.logClear?.addEventListener('click', () => gcalLog.clear());
 
     // Add-form cal toggle: show active state even without :has() support
-    const addCalCheckbox = document.getElementById('new-sync-toggle');
-    const addCalLabel    = document.getElementById('add-cal-label');
-    addCalCheckbox?.addEventListener('change', () => {
-      addCalLabel?.classList.toggle('is-checked', addCalCheckbox.checked);
-      if (addCalCheckbox.checked && !tokenStore.isValid()) {
-        addCalCheckbox.checked = false;
-        addCalLabel?.classList.remove('is-checked');
+    gcalDOM.newSyncToggle?.addEventListener('change', () => {
+      gcalDOM.addCalLabel?.classList.toggle('is-checked', gcalDOM.newSyncToggle.checked);
+      if (gcalDOM.newSyncToggle.checked && !tokenStore.isValid()) {
+        gcalDOM.newSyncToggle.checked = false;
+        gcalDOM.addCalLabel?.classList.remove('is-checked');
         signIn();
       }
     });
