@@ -115,14 +115,22 @@
             <input id="modal-date" class="form-input" type="date" />
           </div>
         </div>
-        <div class="form-group">
-          <label class="form-label" for="modal-category">Category</label>
-          <select id="modal-category" class="form-select">
-            <option value="Inbox">Inbox</option>
-            <option value="Work">Work</option>
-            <option value="Personal">Personal</option>
-            <option value="Family">Family</option>
-          </select>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="modal-category">Category</label>
+            <select id="modal-category" class="form-select">
+              <!-- options populated by JS -->
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="modal-recurrence">Repeat</label>
+            <select id="modal-recurrence" class="form-select">
+              <option value="">No repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
         </div>
 
         <!-- Visibility controlled by JS based on Google Calendar auth state -->
@@ -238,15 +246,14 @@
 
       <hr class="sidebar-divider" aria-hidden="true" />
 
-      <!-- Category / Project filter -->
+      <!-- Category / Project filter — buttons are JS-rendered -->
       <div class="cat-section">
         <p class="legend-label">Project</p>
-        <div class="cat-list" id="category-nav">
-          <button class="cat-btn active" data-cat="all">All projects</button>
-          <button class="cat-btn" data-cat="Inbox">Inbox</button>
-          <button class="cat-btn" data-cat="Work">Work</button>
-          <button class="cat-btn" data-cat="Personal">Personal</button>
-          <button class="cat-btn" data-cat="Family">Family</button>
+        <div class="cat-list" id="category-nav"></div>
+        <div class="cat-add-row">
+          <input id="cat-add-input" class="cat-add-input" type="text"
+            placeholder="New category…" maxlength="30" autocomplete="off" />
+          <button id="cat-add-btn" class="cat-add-btn" aria-label="Add category" title="Add category">+</button>
         </div>
       </div>
 
@@ -286,6 +293,11 @@
           <p class="page-sub" id="page-subtitle">Let's get things done.</p>
         </div>
         <div class="header-actions">
+          <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle theme" title="Toggle theme" data-theme="auto">
+            <svg class="icon-auto"  width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="3.5" stroke="currentColor" stroke-width="1.5"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.05 3.05l1.06 1.06M11.89 11.89l1.06 1.06M3.05 12.95l1.06-1.06M11.89 4.11l1.06-1.06" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <svg class="icon-dark"  width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 10A6 6 0 016 2.5a6 6 0 100 11 6 6 0 007.5-3.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg class="icon-light" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="3.5" fill="currentColor"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.05 3.05l1.06 1.06M11.89 11.89l1.06 1.06M3.05 12.95l1.06-1.06M11.89 4.11l1.06-1.06" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
           <label class="form-label sr-only" for="sort-select">Sort by</label>
           <select id="sort-select" class="form-select form-select--sm">
             <option value="manual">Manual order</option>
@@ -295,6 +307,17 @@
           </select>
         </div>
       </header>
+
+      <!-- Search -->
+      <div class="search-bar">
+        <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="6.5" cy="6.5" r="5" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input id="search-input" class="search-input" type="search"
+          placeholder="Search tasks… (/)" autocomplete="off" />
+        <kbd class="search-clear" id="search-clear" hidden aria-label="Clear search">esc</kbd>
+      </div>
 
       <!-- Add task form -->
       <div class="add-task-card">
@@ -311,10 +334,7 @@
             <option value="high">🔴 High</option>
           </select>
           <select id="new-category" class="pill-select" aria-label="Category">
-            <option value="Inbox">Inbox</option>
-            <option value="Work">Work</option>
-            <option value="Personal">Personal</option>
-            <option value="Family">Family</option>
+            <!-- options populated by JS -->
           </select>
           <label class="pill-date-wrap" id="new-date-wrap">
             <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
@@ -325,6 +345,12 @@
             <span class="pill-date-text" id="new-date-text">Due date</span>
             <input id="new-date" class="pill-date" type="date" />
           </label>
+          <select id="new-recurrence" class="pill-select" aria-label="Repeat">
+            <option value="">No repeat</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
           <div class="add-task-right">
             <!-- Visibility controlled by JS when Google Calendar is connected -->
             <label class="add-cal-label" id="add-cal-label" aria-label="Sync new task to Google Calendar">

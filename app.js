@@ -24,11 +24,71 @@ const state = {
   sort:           'manual', // 'manual' | 'priority' | 'dueDate' | 'created'
   editingId:      null,
   categoryFilter: 'all',    // 'all' | category name
-  dragState:      { draggedId: null, overId: null },
+  dragState:      { draggedId: null, overId: null, insertAfter: false },
+  search:         '',
+  theme:          'auto',
 };
 
-const STORAGE_KEY = 'doable_todos_v3';
-const CATEGORIES  = ['Inbox', 'Work', 'Personal', 'Family'];
+const STORAGE_KEY    = 'doable_todos_v3';
+const CATEGORIES_KEY = 'doable_categories_v1';
+const THEME_KEY      = 'doable_theme';
+
+let CATEGORIES = ['Inbox', 'Work', 'Personal', 'Family'];
+
+/* ── Category persistence ───────────────────── */
+const categoryStore = {
+  load() {
+    try {
+      const raw = localStorage.getItem(CATEGORIES_KEY);
+      if (raw) CATEGORIES = JSON.parse(raw);
+    } catch { CATEGORIES = ['Inbox', 'Work', 'Personal', 'Family']; }
+    if (!CATEGORIES.includes('Inbox')) CATEGORIES.unshift('Inbox');
+  },
+  save() {
+    try { localStorage.setItem(CATEGORIES_KEY, JSON.stringify(CATEGORIES)); } catch {}
+  },
+  add(name) {
+    name = name.trim();
+    if (!name || CATEGORIES.includes(name)) return false;
+    CATEGORIES.push(name);
+    categoryStore.save();
+    return true;
+  },
+  remove(name) {
+    if (name === 'Inbox') return;
+    CATEGORIES = CATEGORIES.filter(c => c !== name);
+    categoryStore.save();
+    state.todos.forEach(t => { if (t.category === name) t.category = 'Inbox'; });
+    store.save();
+    if (state.categoryFilter === name) state.categoryFilter = 'all';
+  },
+  rename(oldName, newName) {
+    if (oldName === 'Inbox') return false;
+    newName = newName.trim();
+    if (!newName || newName === oldName || CATEGORIES.includes(newName)) return false;
+    const idx = CATEGORIES.indexOf(oldName);
+    if (idx === -1) return false;
+    CATEGORIES[idx] = newName;
+    categoryStore.save();
+    state.todos.forEach(t => { if (t.category === oldName) t.category = newName; });
+    store.save();
+    if (state.categoryFilter === oldName) state.categoryFilter = newName;
+    return true;
+  },
+};
+
+/* ── Theme ──────────────────────────────────── */
+function applyTheme(t) {
+  state.theme = t || 'auto';
+  try { localStorage.setItem(THEME_KEY, state.theme); } catch {}
+  if (state.theme === 'auto') {
+    document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.setAttribute('data-theme', state.theme);
+  }
+  if (DOM.themeToggle) DOM.themeToggle.dataset.theme = state.theme;
+  if (DOM.themeToggle) DOM.themeToggle.title = `Theme: ${state.theme}`;
+}
 
 /* ═══════════════════════════════════════════════
    2. UTILS
@@ -71,6 +131,14 @@ const utils = {
   },
 
   priorityOrder: { high: 0, medium: 1, low: 2 },
+
+  nextRecurrenceDate(dateISO, recurrence) {
+    const base = dateISO ? new Date(dateISO + 'T12:00:00') : new Date();
+    if (recurrence === 'daily')   base.setDate(base.getDate() + 1);
+    if (recurrence === 'weekly')  base.setDate(base.getDate() + 7);
+    if (recurrence === 'monthly') base.setMonth(base.getMonth() + 1);
+    return `${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}-${String(base.getDate()).padStart(2,'0')}`;
+  },
 };
 
 /* ═══════════════════════════════════════════════
@@ -90,6 +158,7 @@ const store = {
         if (t.calSyncedAt === undefined) t.calSyncedAt = null;
         if (!t.category)                 t.category    = 'Inbox';
         if (t.order       === undefined) t.order       = i * 1000;
+        if (t.recurrence  === undefined) t.recurrence  = null;
       });
     } catch {
       state.todos = [];
@@ -108,7 +177,7 @@ const store = {
     return state.todos.find(t => t.id === id) ?? null;
   },
 
-  add(text, priority, dueDate, calSync = false, category = 'Inbox') {
+  add(text, priority, dueDate, calSync = false, category = 'Inbox', recurrence = null) {
     const minOrder = state.todos.length ? state.todos[0].order - 1000 : 0;
     const todo = {
       id:          utils.uid(),
@@ -119,6 +188,7 @@ const store = {
       createdAt:   Date.now(),
       order:       minOrder,
       category:    CATEGORIES.includes(category) ? category : 'Inbox',
+      recurrence:  recurrence || null,
       calSync,
       calEventId:  null,
       calSyncedAt: null,
@@ -137,15 +207,16 @@ const store = {
   },
 
   // Returns { todo, prev } so the caller can decide which GCal action to take.
-  update(id, { text, priority, dueDate, calSync, category }) {
+  update(id, { text, priority, dueDate, calSync, category, recurrence }) {
     const todo = store.find(id);
     if (!todo) return null;
     const prev = structuredClone(todo);
-    if (text     !== undefined) todo.text     = text.trim();
-    if (priority !== undefined) todo.priority = priority;
-    if (dueDate  !== undefined) todo.dueDate  = dueDate;
-    if (calSync  !== undefined) todo.calSync  = calSync;
-    if (category !== undefined) todo.category = CATEGORIES.includes(category) ? category : 'Inbox';
+    if (text       !== undefined) todo.text       = text.trim();
+    if (priority   !== undefined) todo.priority   = priority;
+    if (dueDate    !== undefined) todo.dueDate    = dueDate;
+    if (calSync    !== undefined) todo.calSync    = calSync;
+    if (category   !== undefined) todo.category   = CATEGORIES.includes(category) ? category : 'Inbox';
+    if (recurrence !== undefined) todo.recurrence = recurrence || null;
     store.save();
     return { todo, prev };
   },
@@ -167,14 +238,15 @@ const store = {
     return removed;
   },
 
-  reorder(draggedId, overId) {
+  reorder(draggedId, overId, insertAfter = false) {
     if (draggedId === overId) return;
     const from = state.todos.findIndex(t => t.id === draggedId);
-    const to   = state.todos.findIndex(t => t.id === overId);
-    if (from === -1 || to === -1) return;
+    if (from === -1) return;
     const [item] = state.todos.splice(from, 1);
-    state.todos.splice(to, 0, item);
-    // Keep order field in sync with array position so it persists correctly
+    const to = state.todos.findIndex(t => t.id === overId);
+    if (to === -1) { state.todos.unshift(item); } else {
+      state.todos.splice(insertAfter ? to + 1 : to, 0, item);
+    }
     state.todos.forEach((t, i) => { t.order = (i + 1) * 1000; });
     store.save();
   },
@@ -190,13 +262,15 @@ const store = {
   },
 
   getVisible() {
+    const q = state.search.toLowerCase();
     let list = state.todos.filter(t => {
       const passStatus =
         state.filter === 'active'    ? !t.completed :
         state.filter === 'completed' ?  t.completed : true;
       const passCat =
         state.categoryFilter === 'all' || t.category === state.categoryFilter;
-      return passStatus && passCat;
+      const passSearch = !q || t.text.toLowerCase().includes(q);
+      return passStatus && passCat && passSearch;
     });
     if (state.sort === 'priority') {
       list = [...list].sort((a, b) =>
@@ -234,15 +308,16 @@ function initDOM() {
     pageSubtitle:  document.getElementById('page-subtitle'),
 
     // Add form
-    newTaskInput:  document.getElementById('new-task-input'),
-    newPriority:   document.getElementById('new-priority'),
-    newCategory:   document.getElementById('new-category'),
-    newDate:       document.getElementById('new-date'),
-    newDateWrap:   document.getElementById('new-date-wrap'),
-    newDateText:   document.getElementById('new-date-text'),
-    newSyncToggle: document.getElementById('new-sync-toggle'),
-    addTaskBtn:    document.getElementById('add-task-btn'),
-    addCalLabel:   document.getElementById('add-cal-label'),
+    newTaskInput:   document.getElementById('new-task-input'),
+    newPriority:    document.getElementById('new-priority'),
+    newCategory:    document.getElementById('new-category'),
+    newRecurrence:  document.getElementById('new-recurrence'),
+    newDate:        document.getElementById('new-date'),
+    newDateWrap:    document.getElementById('new-date-wrap'),
+    newDateText:    document.getElementById('new-date-text'),
+    newSyncToggle:  document.getElementById('new-sync-toggle'),
+    addTaskBtn:     document.getElementById('add-task-btn'),
+    addCalLabel:    document.getElementById('add-cal-label'),
 
     // Sidebar
     navItems:          document.querySelectorAll('.nav-item'),
@@ -250,22 +325,32 @@ function initDOM() {
     clearCompletedBtn: document.getElementById('clear-completed-btn'),
     gcalSyncAllBtn:    document.getElementById('gcal-sync-all-btn'),
     categoryNav:       document.getElementById('category-nav'),
+    catAddInput:       document.getElementById('cat-add-input'),
+    catAddBtn:         document.getElementById('cat-add-btn'),
+
+    // Search
+    searchInput: document.getElementById('search-input'),
+    searchClear: document.getElementById('search-clear'),
 
     // Export / Import
     exportBtn:       document.getElementById('export-btn'),
     importBtn:       document.getElementById('import-btn'),
     importFileInput: document.getElementById('import-file-input'),
 
+    // Theme toggle
+    themeToggle: document.getElementById('theme-toggle'),
+
     // Edit modal
-    modal:           document.getElementById('edit-modal'),
-    modalText:       document.getElementById('modal-text'),
-    modalPriority:   document.getElementById('modal-priority'),
-    modalCategory:   document.getElementById('modal-category'),
-    modalDate:       document.getElementById('modal-date'),
-    modalSyncToggle: document.getElementById('modal-sync-toggle'),
-    modalSaveBtn:    document.getElementById('modal-save-btn'),
-    modalCancelBtn:  document.getElementById('modal-cancel-btn'),
-    modalCloseBtn:   document.getElementById('modal-close-btn'),
+    modal:            document.getElementById('edit-modal'),
+    modalText:        document.getElementById('modal-text'),
+    modalPriority:    document.getElementById('modal-priority'),
+    modalCategory:    document.getElementById('modal-category'),
+    modalRecurrence:  document.getElementById('modal-recurrence'),
+    modalDate:        document.getElementById('modal-date'),
+    modalSyncToggle:  document.getElementById('modal-sync-toggle'),
+    modalSaveBtn:     document.getElementById('modal-save-btn'),
+    modalCancelBtn:   document.getElementById('modal-cancel-btn'),
+    modalCloseBtn:    document.getElementById('modal-close-btn'),
 
     // Nav container — used for event delegation instead of per-item listeners
     sidebarNav: document.querySelector('.sidebar-nav'),
@@ -291,6 +376,50 @@ function render() {
 }
 
 const ui = {
+  renderCategories() {
+    const nav = DOM.categoryNav;
+    if (!nav) return;
+    const frag = document.createDocumentFragment();
+
+    // "All projects" button
+    const allBtn = document.createElement('button');
+    allBtn.className = 'cat-btn' + (state.categoryFilter === 'all' ? ' active' : '');
+    allBtn.dataset.cat = 'all';
+    allBtn.innerHTML = '<span class="cat-btn-name">All projects</span>';
+    frag.appendChild(allBtn);
+
+    CATEGORIES.forEach(cat => {
+      const btn = document.createElement('button');
+      btn.className = 'cat-btn' + (state.categoryFilter === cat ? ' active' : '');
+      btn.dataset.cat = cat;
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'cat-btn-name';
+      nameSpan.textContent = cat;
+      btn.appendChild(nameSpan);
+
+      // Non-Inbox categories get rename/delete icons
+      if (cat !== 'Inbox') {
+        const icons = document.createElement('span');
+        icons.className = 'cat-btn-icons';
+        icons.innerHTML =
+          `<button class="cat-icon-btn" data-action="rename" data-cat="${utils.escapeHTML(cat)}" title="Rename" aria-label="Rename ${utils.escapeHTML(cat)}">✎</button>` +
+          `<button class="cat-icon-btn is-delete" data-action="delete" data-cat="${utils.escapeHTML(cat)}" title="Delete" aria-label="Delete ${utils.escapeHTML(cat)}">×</button>`;
+        btn.appendChild(icons);
+      }
+      frag.appendChild(btn);
+    });
+
+    nav.innerHTML = '';
+    nav.appendChild(frag);
+  },
+
+  renderCategorySelects() {
+    const options = CATEGORIES.map(c => `<option value="${utils.escapeHTML(c)}">${utils.escapeHTML(c)}</option>`).join('');
+    if (DOM.newCategory)    DOM.newCategory.innerHTML    = options;
+    if (DOM.modalCategory)  DOM.modalCategory.innerHTML  = options;
+  },
+
   render() {
     const visible   = store.getVisible();
     const all       = state.todos;
@@ -380,6 +509,7 @@ const ui = {
           ${ui.buildDateMeta(todo.dueDate, isOverdue)}
           ${ui.buildCalBadge(todo)}
           ${ui.buildCategoryBadge(todo)}
+          ${ui.buildRecurBadge(todo)}
         </div>
       </div>
 
@@ -399,8 +529,9 @@ const ui = {
       </div>
     `;
 
-    // Drag-and-drop stays per-element (drag events don't delegate cleanly to a container)
+    // Drag-and-drop and swipe stay per-element
     dnd.bindToEl(li);
+    swipe.bindToEl(li);
     return li;
   },
 
@@ -454,9 +585,14 @@ const ui = {
   },
 
   buildCategoryBadge(todo) {
-    // Inbox is the default — only badge non-default categories to avoid visual noise
     if (!todo.category || todo.category === 'Inbox') return '';
     return `<span class="meta-badge badge--category">${utils.escapeHTML(todo.category)}</span>`;
+  },
+
+  buildRecurBadge(todo) {
+    if (!todo.recurrence) return '';
+    const labels = { daily: '↻ Daily', weekly: '↻ Weekly', monthly: '↻ Monthly' };
+    return `<span class="meta-badge badge--recur">${labels[todo.recurrence] || todo.recurrence}</span>`;
   },
 
   buildSyncBtn(todo) {
@@ -501,9 +637,13 @@ const dnd = {
     el.addEventListener('dragstart', dnd.onDragStart);
     el.addEventListener('dragend',   dnd.onDragEnd);
     el.addEventListener('dragover',  dnd.onDragOver);
-    el.addEventListener('dragenter', dnd.onDragEnter);
     el.addEventListener('dragleave', dnd.onDragLeave);
     el.addEventListener('drop',      dnd.onDrop);
+  },
+
+  clearIndicators() {
+    document.querySelectorAll('.task-item.drag-over-top, .task-item.drag-over-bottom')
+      .forEach(el => el.classList.remove('drag-over-top', 'drag-over-bottom'));
   },
 
   onDragStart(e) {
@@ -515,41 +655,90 @@ const dnd = {
 
   onDragEnd(e) {
     e.currentTarget.classList.remove('dragging');
-    document.querySelectorAll('.task-item.drag-over').forEach(el => el.classList.remove('drag-over'));
-    state.dragState.draggedId = null;
-    state.dragState.overId    = null;
+    dnd.clearIndicators();
+    state.dragState.draggedId  = null;
+    state.dragState.overId     = null;
+    state.dragState.insertAfter = false;
   },
 
   onDragOver(e) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-  },
-
-  onDragEnter(e) {
-    e.preventDefault();
     const target = e.currentTarget;
     if (target.dataset.id === state.dragState.draggedId) return;
-    document.querySelectorAll('.task-item.drag-over').forEach(el => el.classList.remove('drag-over'));
-    target.classList.add('drag-over');
-    state.dragState.overId = target.dataset.id;
+
+    const rect = target.getBoundingClientRect();
+    const insertAfter = e.clientY > rect.top + rect.height / 2;
+    const newClass = insertAfter ? 'drag-over-bottom' : 'drag-over-top';
+
+    if (!target.classList.contains(newClass)) {
+      dnd.clearIndicators();
+      target.classList.add(newClass);
+      state.dragState.overId      = target.dataset.id;
+      state.dragState.insertAfter = insertAfter;
+    }
   },
 
   onDragLeave(e) {
     if (!e.currentTarget.contains(e.relatedTarget)) {
-      e.currentTarget.classList.remove('drag-over');
+      e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
     }
   },
 
   onDrop(e) {
     e.preventDefault();
-    e.currentTarget.classList.remove('drag-over');
-    const { draggedId, overId } = state.dragState;
+    dnd.clearIndicators();
+    const { draggedId, overId, insertAfter } = state.dragState;
     if (!draggedId || !overId || draggedId === overId) return;
     if (state.sort !== 'manual') {
       window.googleCalendar?.toast.show('Switch to Manual order to drag-reorder tasks.', 'info');
       return;
     }
-    controller.reorder(draggedId, overId);
+    controller.reorder(draggedId, overId, insertAfter);
+  },
+};
+
+/* ═══════════════════════════════════════════════
+   SWIPE TO COMPLETE (mobile)
+═══════════════════════════════════════════════ */
+const swipe = {
+  bindToEl(el) {
+    let startX = 0, startY = 0, tracking = false;
+
+    el.addEventListener('touchstart', (e) => {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      tracking = false;
+    }, { passive: true });
+
+    el.addEventListener('touchmove', (e) => {
+      const dx = e.touches[0].clientX - startX;
+      const dy = e.touches[0].clientY - startY;
+      // If movement is more vertical than horizontal, let scroll handle it
+      if (!tracking && Math.abs(dy) > Math.abs(dx)) return;
+      if (Math.abs(dx) > 10) {
+        tracking = true;
+        if (dx > 0) {
+          const clamp = Math.min(dx * 0.4, 55);
+          el.style.transform  = `translateX(${clamp}px)`;
+          el.style.transition = 'none';
+          el.classList.toggle('swipe-right', dx > 60);
+        }
+      }
+    }, { passive: true });
+
+    el.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - startX;
+      el.style.transform  = '';
+      el.style.transition = '';
+      el.classList.remove('swipe-right');
+      if (tracking && dx > 80) {
+        const id   = el.dataset.id;
+        const todo = store.find(id);
+        if (todo && !todo.completed) controller.toggleTask(id);
+      }
+      tracking = false;
+    }, { passive: true });
   },
 };
 
@@ -567,7 +756,8 @@ const modal = {
     DOM.modalPriority.value     = todo.priority;
     DOM.modalDate.value         = todo.dueDate || '';
     DOM.modalSyncToggle.checked = !!todo.calSync;
-    if (DOM.modalCategory) DOM.modalCategory.value = todo.category || 'Inbox';
+    if (DOM.modalCategory)   DOM.modalCategory.value   = todo.category || 'Inbox';
+    if (DOM.modalRecurrence) DOM.modalRecurrence.value = todo.recurrence || '';
 
     DOM.modal.hidden = false;
     document.body.style.overflow = 'hidden';
@@ -583,11 +773,12 @@ const modal = {
   // Returns raw form values — controller decides what to do with them.
   readForm() {
     return {
-      text:     DOM.modalText.value.trim(),
-      priority: DOM.modalPriority.value,
-      dueDate:  DOM.modalDate.value,
-      calSync:  DOM.modalSyncToggle.checked,
-      category: DOM.modalCategory?.value || 'Inbox',
+      text:       DOM.modalText.value.trim(),
+      priority:   DOM.modalPriority.value,
+      dueDate:    DOM.modalDate.value,
+      calSync:    DOM.modalSyncToggle.checked,
+      category:   DOM.modalCategory?.value || 'Inbox',
+      recurrence: DOM.modalRecurrence?.value || null,
     };
   },
 };
@@ -599,10 +790,10 @@ const modal = {
    Mutates todo.calEventId/calSyncedAt and calls store.save() on success.
    Returns true if the sync succeeded.
 ═══════════════════════════════════════════════ */
-async function applyCalSync(todo) {
+async function applyCalSync(todo, { silent = false } = {}) {
   const gcal = window.googleCalendar;
   if (!gcal?.isAuthenticated()) return false;
-  const result = await gcal.syncTodo(todo);
+  const result = await gcal.syncTodo(todo, { silent });
   if (result.success) {
     todo.calEventId  = result.eventId;
     todo.calSyncedAt = Date.now();
@@ -623,14 +814,16 @@ const controller = {
     const text = DOM.newTaskInput.value.trim();
     if (!text) { DOM.newTaskInput.focus(); return; }
 
-    const calSync  = DOM.newSyncToggle?.checked ?? false;
-    const category = DOM.newCategory?.value || 'Inbox';
-    const todo = store.add(text, DOM.newPriority.value, DOM.newDate.value, calSync, category);
+    const calSync     = DOM.newSyncToggle?.checked ?? false;
+    const category    = DOM.newCategory?.value || 'Inbox';
+    const recurrence  = DOM.newRecurrence?.value || null;
+    const todo = store.add(text, DOM.newPriority.value, DOM.newDate.value, calSync, category, recurrence);
 
     // Reset add form
     DOM.newTaskInput.value = '';
     DOM.newDate.value      = '';
     DOM.newPriority.value  = 'medium';
+    if (DOM.newRecurrence) DOM.newRecurrence.value = '';
     if (DOM.newSyncToggle) {
       DOM.newSyncToggle.checked = false;
       DOM.addCalLabel?.classList.remove('is-checked');
@@ -653,9 +846,22 @@ const controller = {
   toggleTask(id) {
     const todo = store.toggle(id);
     render();
-    // Silent calendar update — no re-render needed
     if (todo?.calSync && todo.calEventId && window.googleCalendar?.isAuthenticated()) {
       window.googleCalendar.syncTodo(todo, { silent: true });
+    }
+    // On complete, spawn next occurrence for recurring tasks
+    if (todo && todo.completed && todo.recurrence) {
+      controller.createNextRecurrence(todo);
+    }
+  },
+
+  async createNextRecurrence(todo) {
+    const nextDate = utils.nextRecurrenceDate(todo.dueDate, todo.recurrence);
+    const next = store.add(todo.text, todo.priority, nextDate, false, todo.category, todo.recurrence);
+    render();
+    if (todo.calSync && window.googleCalendar?.isAuthenticated()) {
+      const synced = await applyCalSync(next);
+      if (synced) render();
     }
   },
 
@@ -690,7 +896,8 @@ const controller = {
     if (!gcal?.isAuthenticated()) return;
 
     if (form.calSync) {
-      const synced = await applyCalSync(todo);
+      // Silent if it's a re-sync (event already exists); loud only for first-time sync
+      const synced = await applyCalSync(todo, { silent: !!prev.calEventId });
       if (synced) render();
     } else if (prev.calSync && todo.calEventId) {
       // Sync was turned off — remove the calendar event
@@ -738,8 +945,8 @@ const controller = {
     render();
   },
 
-  reorder(draggedId, overId) {
-    store.reorder(draggedId, overId);
+  reorder(draggedId, overId, insertAfter) {
+    store.reorder(draggedId, overId, insertAfter);
     state.sort = 'manual';
     DOM.sortSelect.value = 'manual';
     render();
@@ -751,15 +958,65 @@ const controller = {
     window.googleCalendar?.syncAllTodos(state.todos, onUpdated);
   },
 
-  // ── Phase 2: Category filter ──────────────────
+  // ── Category filter ───────────────────────────
   setCategoryFilter(cat) {
     state.categoryFilter = cat;
-    DOM.categoryNav?.querySelectorAll('.cat-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.cat === cat);
-    });
-    // Auto-set add form category to match filter for fast sequential adds
     if (DOM.newCategory && cat !== 'all') DOM.newCategory.value = cat;
     render();
+    ui.renderCategories(); // update active state
+  },
+
+  // ── Category CRUD ─────────────────────────────
+  addCategory() {
+    const name = DOM.catAddInput?.value?.trim();
+    if (!name) return;
+    if (categoryStore.add(name)) {
+      DOM.catAddInput.value = '';
+      ui.renderCategories();
+      ui.renderCategorySelects();
+      // restore selected category in add form
+      if (DOM.newCategory && state.categoryFilter !== 'all') {
+        DOM.newCategory.value = state.categoryFilter;
+      }
+    } else {
+      window.googleCalendar?.toast.show(`"${name}" already exists.`, 'info');
+    }
+  },
+
+  deleteCategory(name) {
+    if (name === 'Inbox') return;
+    if (!confirm(`Delete category "${name}"? Tasks will move to Inbox.`)) return;
+    categoryStore.remove(name);
+    ui.renderCategories();
+    ui.renderCategorySelects();
+    render();
+  },
+
+  renameCategory(oldName) {
+    if (oldName === 'Inbox') return;
+    const newName = prompt(`Rename "${oldName}" to:`, oldName);
+    if (!newName || newName.trim() === oldName) return;
+    if (!categoryStore.rename(oldName, newName.trim())) {
+      window.googleCalendar?.toast.show(`"${newName.trim()}" already exists.`, 'info');
+      return;
+    }
+    ui.renderCategories();
+    ui.renderCategorySelects();
+    render();
+  },
+
+  // ── Search ────────────────────────────────────
+  setSearch(q) {
+    state.search = q;
+    if (DOM.searchClear) DOM.searchClear.hidden = !q;
+    render();
+  },
+
+  // ── Theme ─────────────────────────────────────
+  cycleTheme() {
+    const order = ['auto', 'dark', 'light'];
+    const next = order[(order.indexOf(state.theme) + 1) % order.length];
+    applyTheme(next);
   },
 
   // ── Phase 1: Export ───────────────────────────
@@ -810,6 +1067,7 @@ const controller = {
           if (t.calSync     === undefined) t.calSync     = false;
           if (t.calEventId  === undefined) t.calEventId  = null;
           if (t.calSyncedAt === undefined) t.calSyncedAt = null;
+          if (t.recurrence  === undefined) t.recurrence  = null;
         });
 
         state.todos = data.todos;
@@ -882,11 +1140,35 @@ function bindEvents() {
     DOM.newDateWrap?.classList.toggle('has-date', !!DOM.newDate.value);
   });
 
-  // Category filter
+  // Category filter + CRUD (delegated from category-nav)
   DOM.categoryNav?.addEventListener('click', (e) => {
+    const iconBtn = e.target.closest('.cat-icon-btn');
+    if (iconBtn) {
+      e.stopPropagation();
+      if (iconBtn.dataset.action === 'delete') controller.deleteCategory(iconBtn.dataset.cat);
+      if (iconBtn.dataset.action === 'rename') controller.renameCategory(iconBtn.dataset.cat);
+      return;
+    }
     const btn = e.target.closest('.cat-btn[data-cat]');
     if (btn) controller.setCategoryFilter(btn.dataset.cat);
   });
+
+  // Add category
+  DOM.catAddBtn?.addEventListener('click', () => controller.addCategory());
+  DOM.catAddInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); controller.addCategory(); }
+  });
+
+  // Search
+  DOM.searchInput?.addEventListener('input', (e) => controller.setSearch(e.target.value));
+  DOM.searchClear?.addEventListener('click', () => {
+    DOM.searchInput.value = '';
+    controller.setSearch('');
+    DOM.searchInput.focus();
+  });
+
+  // Theme toggle
+  DOM.themeToggle?.addEventListener('click', () => controller.cycleTheme());
 
   // Export / Import
   DOM.exportBtn?.addEventListener('click', () => controller.exportData());
@@ -897,12 +1179,37 @@ function bindEvents() {
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
+    const tag = document.activeElement?.tagName;
+    const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) ||
+                     document.activeElement?.isContentEditable;
+
+    // Always-on shortcuts
     if (e.key === 'Escape') {
-      if (!DOM.modal.hidden)                       { modal.close(); return; }
-      if (DOM.setupModal && !DOM.setupModal.hidden) { window.googleCalendar?.closeSetupModal(); return; }
+      if (!DOM.modal.hidden)                        { modal.close(); return; }
+      if (DOM.setupModal && !DOM.setupModal.hidden)  { window.googleCalendar?.closeSetupModal(); return; }
+      if (state.search) { DOM.searchInput.value = ''; controller.setSearch(''); return; }
     }
-    if (e.key === 'Enter' && !DOM.modal.hidden) {
+    // Cmd/Ctrl+Enter saves modal regardless of focus
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !DOM.modal.hidden) {
+      e.preventDefault();
+      controller.saveEdit();
+      return;
+    }
+    // Enter in open modal (no modifier) saves when not on cancel button
+    if (e.key === 'Enter' && !DOM.modal.hidden && !e.metaKey && !e.ctrlKey) {
       if (document.activeElement !== DOM.modalCancelBtn) controller.saveEdit();
+      return;
+    }
+    // Shortcuts that must not fire while typing
+    if (isTyping) return;
+    if (e.key === '/') {
+      e.preventDefault();
+      DOM.searchInput?.focus();
+      DOM.searchInput?.select();
+    }
+    if (e.key === 'n') {
+      e.preventDefault();
+      DOM.newTaskInput?.focus();
     }
   });
 }
@@ -912,7 +1219,12 @@ function bindEvents() {
 ═══════════════════════════════════════════════ */
 function init() {
   initDOM();
+  categoryStore.load();
   store.load();
+  // Apply saved theme before first render to avoid flash
+  applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
+  ui.renderCategories();
+  ui.renderCategorySelects();
   bindEvents();
   window.googleCalendar?.init();
   render();
